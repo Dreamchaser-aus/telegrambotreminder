@@ -1,7 +1,7 @@
-# main.py
-# FastAPI admin + Telegram bot (python-telegram-bot v20.6) + APScheduler
-# - 使用 Session 登录保护管理页与写接口
-# - 使用 lifespan 代替 on_event，避免 Deprecation 警告
+# FastAPI admin + Telegram bot (python-telegram-bot v20.6) + APScheduler + SQLAlchemy(DB)
+# - 已订阅用户存数据库（Postgres/SQLite）
+# - 首次启动自动把旧 users.json 迁移进 DB（若 DB 为空）
+# - 登录保护管理面板（SessionMiddleware）
 import os
 import json
 import asyncio
@@ -17,17 +17,20 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select, func
 
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
 
-# --- Config & Paths ---------------------------------------------------------
+# --- Config & DB ------------------------------------------------------------
 from config import (
     BOT_TOKEN, USER_FILE, BACKUP_DIR, MEDIA_DIR, RANDOM_DIR,
     DEFAULT_MESSAGE_TEMPLATE, DEFAULT_IMAGE, RANDOM_MESSAGES,
     SCHEDULES_DEFAULT, TIMEZONE, GROUPS_FILE, SCHEDULES_FILE,
     ADMIN_KEY, ADMIN_USER, ADMIN_PASS, SECRET_KEY,
 )
+from db import SessionLocal, init_db
+from models import User
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,49 +40,32 @@ logger = logging.getLogger("daily_sender")
 
 TZ = pytz.timezone(TIMEZONE)
 
-# --- Storage helpers --------------------------------------------------------
-class UserManager:
-    def __init__(self, user_file: str):
-        self.user_file = user_file
-        self.users = self._load_users()
-        self._ensure_dirs()
+# --- Managers ---------------------------------------------------------------
+class UserManagerDB:
+    """DB-backed user manager."""
+    def add(self, chat_id: int):
+        with SessionLocal() as db:
+            exists = db.scalar(select(User).where(User.chat_id == chat_id))
+            if not exists:
+                db.add(User(chat_id=int(chat_id)))
+                db.commit()
 
-    def _ensure_dirs(self):
-        for d in [os.path.dirname(self.user_file) or ".", BACKUP_DIR, MEDIA_DIR, RANDOM_DIR]:
-            if d and not os.path.exists(d):
-                os.makedirs(d, exist_ok=True)
+    def remove(self, chat_id: int):
+        with SessionLocal() as db:
+            u = db.scalar(select(User).where(User.chat_id == chat_id))
+            if u:
+                db.delete(u)
+                db.commit()
 
-    def _load_users(self):
-        try:
-            if os.path.exists(self.user_file):
-                with open(self.user_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return set(data if isinstance(data, list) else [])
-        except Exception as e:
-            logger.error(f"加载用户文件失败: {e}")
-        return set()
+    def is_subscribed(self, chat_id: int) -> bool:
+        with SessionLocal() as db:
+            count = db.scalar(select(func.count()).select_from(User).where(User.chat_id == chat_id))
+            return bool(count and count > 0)
 
-    def save(self):
-        try:
-            with open(self.user_file, "w", encoding="utf-8") as f:
-                json.dump(sorted(list(self.users)), f, ensure_ascii=False, indent=2)
-            backup_file = os.path.join(BACKUP_DIR, f"users_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-            with open(backup_file, "w", encoding="utf-8") as f:
-                json.dump(sorted(list(self.users)), f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"保存用户失败: {e}")
-
-    def add(self, user_id: int):
-        self.users.add(user_id)
-        self.save()
-
-    def remove(self, user_id: int):
-        self.users.discard(user_id)
-        self.save()
-
-    def is_subscribed(self, user_id: int) -> bool:
-        return user_id in self.users
-
+    def all_chat_ids(self) -> List[int]:
+        with SessionLocal() as db:
+            rows = db.execute(select(User.chat_id)).all()
+            return [r[0] for r in rows]
 
 class MessageGroupManager:
     def __init__(self, groups_file: str):
@@ -130,7 +116,6 @@ class MessageGroupManager:
             return None
         return random.choice(self.groups)
 
-
 class ScheduleManager:
     def __init__(self, schedules_file: str, default: List[dict]):
         self.schedules_file = schedules_file
@@ -165,9 +150,8 @@ class ScheduleManager:
         items = [x for x in items if not (x.get("hour") == hour and x.get("minute") == minute)]
         self.save_all(items)
 
-
 # --- Globals ---------------------------------------------------------------
-user_manager = UserManager(USER_FILE)
+user_manager = UserManagerDB()
 group_manager = MessageGroupManager(GROUPS_FILE)
 schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 
@@ -210,7 +194,7 @@ async def send_daily_message():
     if not message:
         message = DEFAULT_MESSAGE_TEMPLATE.format(time=datetime.now(TZ).strftime("%H:%M"))
 
-    for uid in list(user_manager.users):
+    for uid in user_manager.all_chat_ids():
         try:
             if image:
                 with open(image, "rb") as fp:
@@ -221,7 +205,7 @@ async def send_daily_message():
         except Exception as e:
             logger.error(f"发送给 {uid} 失败: {e}")
 
-# --- Auth helpers -----------------------------------------------------------
+# --- Auth helpers (登录 + 兼容 Header 授权) ---------------------------------
 def is_logged_in(request: Request) -> bool:
     return request.session.get("auth") == "ok"
 
@@ -230,12 +214,11 @@ def require_admin_header(x_admin_key: Optional[str]):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 def require_admin_access(request: Request, x_admin_key: Optional[str]):
-    # 已登录 或 正确的 X-Admin-Key 二择一
     if is_logged_in(request):
         return
     require_admin_header(x_admin_key)
 
-# --- Admin HTML -------------------------------------------------------------
+# --- Admin HTML / Login HTML ------------------------------------------------
 ADMIN_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -329,7 +312,6 @@ ADMIN_HTML = r"""
   <div id="flash"></div>
 
 <script>
-  // 现在不需要 X-Admin-Key 了（已使用会话登录）
   const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500)};
 
   async function loadAll(){ await loadGroups(); await loadSchedules(); }
@@ -439,26 +421,47 @@ LOGIN_HTML = r"""
 </html>
 """
 
-# --- FastAPI lifespan: 启动/停止逻辑 -----------------------------------------
+# --- Lifespan：启动/停止 & 首次迁移 users.json ------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 初始化数据库 & 迁移旧 users.json
+    init_db()
+    try:
+        if os.path.exists(USER_FILE):
+            from sqlalchemy import select as _select
+            with SessionLocal() as db:
+                count = db.scalar(select(func.count()).select_from(User))
+                if not count:
+                    with open(USER_FILE, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, list):
+                            for cid in data:
+                                try:
+                                    db.add(User(chat_id=int(cid)))
+                                except Exception:
+                                    pass
+                            db.commit()
+                            logger.info(f"🔁 已迁移 {len(data)} 个用户到数据库")
+    except Exception as e:
+        logger.error(f"用户迁移失败: {e}")
+
+    # 启动 Telegram 机器人
     global telegram_app
     telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("stop", cmd_stop))
     telegram_app.add_handler(CommandHandler("test", cmd_test))
 
+    # 启动定时器
     if not scheduler.running:
         scheduler.start()
-    # 默认按文件加载所有 cron
     for job in scheduler.get_jobs():
         job.remove()
     for s in schedule_manager.list():
-        hour = int(s.get("hour", 9))
-        minute = int(s.get("minute", 0))
-        scheduler.add_job(send_daily_message, "cron", hour=hour, minute=minute)
-        logger.info(f"⏰ 已添加计划任务: {hour:02d}:{minute:02d}")
+        scheduler.add_job(send_daily_message, "cron", hour=int(s.get("hour", 9)), minute=int(s.get("minute", 0)))
+        logger.info(f"⏰ 已添加计划任务: {int(s.get('hour', 9)):02d}:{int(s.get('minute', 0)):02d}")
 
+    # 后台轮询
     async def run_bot():
         await telegram_app.initialize()
         await telegram_app.start()
@@ -469,9 +472,7 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(run_bot())
     logger.info("✅ Startup complete: admin + bot running")
-
     yield
-
     try:
         scheduler.shutdown(wait=False)
     except Exception:
@@ -482,12 +483,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-# --- App init ---------------------------------------------------------------
+# --- App 初始化 & 路由 -------------------------------------------------------
 app = FastAPI(title="Daily Sender Admin", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, session_cookie="admin_session", same_site="lax")
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
-# --- Routes (login protected) -----------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     if not is_logged_in(request):
@@ -503,7 +503,6 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
     if username == ADMIN_USER and password == ADMIN_PASS and ADMIN_PASS:
         request.session["auth"] = "ok"
         return RedirectResponse(url="/", status_code=303)
-    # 失败
     html = LOGIN_HTML.replace("%ERR%", "Invalid username or password.")
     return HTMLResponse(content=html)
 
@@ -512,16 +511,14 @@ async def do_logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login")
 
-# Health（无需登录）
 @app.get("/health")
 async def health():
     return {"ok": True, "time": datetime.utcnow().isoformat()}
 
-# --- APIs（需要：已登录 或 有 X-Admin-Key） -------------------------------
+# APIs（需登录 或 X-Admin-Key）
 @app.get("/api/groups")
 async def api_groups(request: Request):
     if not is_logged_in(request):
-        # 读接口你也可以放行，这里统一要求登录；如需放开可删这行
         raise HTTPException(status_code=401, detail="Unauthorized")
     return group_manager.groups
 
