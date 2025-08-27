@@ -625,10 +625,17 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
     html = LOGIN_HTML.replace("%ERR%", "Invalid username or password.")
     return HTMLResponse(content=html)
 
+# ✅ 修复：登出后以 303 重定向为 GET，避免要求 username/password
 @app.post("/logout")
 async def do_logout(request: Request):
     request.session.clear()
-    return RedirectResponse(url="/login")
+    return RedirectResponse(url="/login", status_code=303)
+
+# （可选）支持 GET 方式登出，a 标签也可使用
+@app.get("/logout")
+async def do_logout_get(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
 
 @app.get("/health")
 async def health():
