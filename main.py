@@ -227,27 +227,37 @@ ADMIN_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Daily Sender Admin</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #0b1320; color: #eef2ff; }
+    :root{ --bg:#0b1320; --panel:#121d33; --line:#223054; --line2:#23365f; --text:#eef2ff; --muted:#9fb0d9; --accent:#2546f2; --danger:#b3363f; --ok:#21955e; }
+    *{ box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: var(--bg); color: var(--text); }
     header { padding: 16px 20px; background: #111a2e; border-bottom: 1px solid #203055; display:flex; align-items:center; gap:12px; }
     h1 { margin: 0; font-size: 18px; }
-    main { max-width: 920px; margin: 24px auto; padding: 0 16px; }
-    section { background: #121d33; border: 1px solid #223054; border-radius: 14px; padding: 16px; margin-bottom: 18px; }
+    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns: 220px 1fr; gap:16px; }
+    aside{ background:#111a2e; border:1px solid #203055; border-radius:14px; padding:10px; height: fit-content; position:sticky; top:14px; }
+    .navlink{ display:block; width:100%; text-align:left; border:1px solid var(--line); background:#0f1a2d; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer; }
+    .navlink.active{ background: var(--accent); border-color: var(--accent); }
+    main { display:block; }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 18px; }
     h2 { margin: 6px 0 14px; font-size: 16px; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; }
     input, textarea, select, button { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #334770; background: #0f1a2d; color: #eaf0ff; }
-    button { cursor: pointer; background: #2546f2; border-color: #2546f2; }
+    button { cursor: pointer; background: var(--accent); border-color: var(--accent); }
     button:disabled{ opacity: .6; }
     label { font-size: 12px; opacity: .85; display:block; margin-bottom: 6px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .muted { opacity: .85; font-size: 13px; }
+    .muted { opacity: .85; font-size: 13px; color: var(--muted); }
     table{ width:100%; border-collapse: collapse; }
-    th, td{ border-bottom:1px solid #23365f; padding: 10px 8px; vertical-align: top; }
+    th, td{ border-bottom:1px solid var(--line2); padding: 10px 8px; vertical-align: top; }
     .pill{ font-size:12px; padding:2px 8px; background:#1b2d52; border-radius:999px; border:1px solid #29437a;}
     .inline{ display:inline-flex; gap:8px; align-items:center;}
-    .danger{ background:#b3363f; border-color:#b3363f;}
-    .success{ background:#21955e; border-color:#21955e;}
+    .danger{ background:var(--danger); border-color:var(--danger);}
+    .success{ background:var(--ok); border-color:var(--ok);}
     #flash{ position: fixed; right:16px; bottom:16px; background:#1c2c50; border:1px solid #2c4781; padding:10px 12px; border-radius:12px; display:none; }
     .spacer{flex:1}
+    .panel{ display:none; }
+    .panel.active{ display:block; }
+    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#0f1a2d; border-radius:10px; margin-right:8px;}
+    .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
   </style>
 </head>
 <body>
@@ -256,66 +266,101 @@ ADMIN_HTML = r"""
     <div class="spacer"></div>
     <form action="/logout" method="post"><button>Logout</button></form>
   </header>
-  <main>
-    <section>
-      <h2>Add Message Group</h2>
-      <div class="grid">
-        <div>
-          <label>Image (optional)</label>
-          <input type="file" id="image"/>
-        </div>
-        <div>
-          <label>Message Text</label>
-          <textarea id="message" rows="5" placeholder="Enter message text..."></textarea>
-        </div>
-      </div>
-      <div style="margin-top:10px;" class="inline">
-        <button onclick="addGroup()">Add Group</button>
-        <button class="success" onclick="sendNowRandom()">Send Random Now (All)</button>
-      </div>
-    </section>
 
-    <section>
-      <h2>Groups</h2>
-      <div id="groups"></div>
-    </section>
+  <div class="layout">
+    <aside>
+      <button class="navlink active" data-name="dashboard" onclick="switchPanel('dashboard')">Dashboard</button>
+      <button class="navlink" data-name="users" onclick="switchPanel('users')">Users</button>
+    </aside>
 
-    <section>
-      <h2>Schedules</h2>
-      <div class="row">
-        <div>
-          <label>Hour</label>
-          <input type="number" id="h" min="0" max="23" value="9"/>
-        </div>
-        <div>
-          <label>Minute</label>
-          <input type="number" id="m" min="0" max="59" value="0"/>
-        </div>
-        <div class="inline">
-          <button onclick="addSchedule()">Add</button>
-          <span class="muted">Server timezone is used.</span>
-        </div>
-      </div>
-      <div id="schedules" style="margin-top:10px;"></div>
-    </section>
+    <main>
+      <!-- DASHBOARD 面板（你的原有功能） -->
+      <div id="panel-dashboard" class="panel active">
+        <section>
+          <h2>Add Message Group</h2>
+          <div class="grid">
+            <div>
+              <label>Image (optional)</label>
+              <input type="file" id="image"/>
+            </div>
+            <div>
+              <label>Message Text</label>
+              <textarea id="message" rows="5" placeholder="Enter message text..."></textarea>
+            </div>
+          </div>
+          <div style="margin-top:10px;" class="inline">
+            <button onclick="addGroup()">Add Group</button>
+            <button class="success" onclick="sendNowRandom()">Send Random Now (All)</button>
+          </div>
+        </section>
 
-    <section>
-      <h2>Utilities</h2>
-      <div class="inline">
-        <button onclick="sendNowRandom()">Send Random Now (All)</button>
-        <button onclick="reloadJobs()">Reload Cron Jobs</button>
-        <span class="muted">Use for quick tests</span>
+        <section>
+          <h2>Groups</h2>
+          <div id="groups"></div>
+        </section>
+
+        <section>
+          <h2>Schedules</h2>
+          <div class="row">
+            <div>
+              <label>Hour</label>
+              <input type="number" id="h" min="0" max="23" value="9"/>
+            </div>
+            <div>
+              <label>Minute</label>
+              <input type="number" id="m" min="0" max="59" value="0"/>
+            </div>
+            <div class="inline">
+              <button onclick="addSchedule()">Add</button>
+              <span class="muted">Server timezone is used.</span>
+            </div>
+          </div>
+          <div id="schedules" style="margin-top:10px;"></div>
+        </section>
+
+        <section>
+          <h2>Utilities</h2>
+          <div class="inline">
+            <button onclick="sendNowRandom()">Send Random Now (All)</button>
+            <button onclick="reloadJobs()">Reload Cron Jobs</button>
+            <span class="muted">Use for quick tests</span>
+          </div>
+        </section>
       </div>
-    </section>
-  </main>
+
+      <!-- USERS 面板 -->
+      <div id="panel-users" class="panel">
+        <section>
+          <h2>Subscribed Users</h2>
+          <div class="inline" style="margin-bottom:8px;">
+            <span class="stat">Total: <b id="userCount">0</b></span>
+            <button onclick="loadUsers()">Refresh</button>
+            <button onclick="exportUsersCSV()">Export CSV</button>
+          </div>
+          <div class="searchbar">
+            <input id="userSearch" placeholder="Filter by chat_id..." oninput="renderUsers()"/>
+          </div>
+          <div id="usersTable"></div>
+        </section>
+      </div>
+    </main>
+  </div>
 
   <div id="flash"></div>
 
 <script>
+  // --- UI helpers ---
   const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500)};
+  function switchPanel(name){
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    document.getElementById('panel-'+name).classList.add('active');
+    document.querySelectorAll('.navlink').forEach(a=>a.classList.toggle('active', a.dataset.name===name));
+    if(name==='dashboard'){ loadGroups(); loadSchedules(); }
+    if(name==='users'){ loadUsers(); }
+  }
+  const fmtTime = (s)=>{ try{ const d=new Date(s); return d.toLocaleString(); }catch(e){ return s||'' } };
 
-  async function loadAll(){ await loadGroups(); await loadSchedules(); }
-
+  // --- Dashboard functions (原有) ---
   async function loadGroups(){
     const r = await fetch('/api/groups'); const j = await r.json();
     const el = document.getElementById('groups');
@@ -329,7 +374,6 @@ ADMIN_HTML = r"""
         <td><button class="danger" onclick="delGroup(${i})">Delete</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
-
   async function addGroup(){
     const fd = new FormData();
     const f = document.getElementById('image').files[0];
@@ -341,25 +385,14 @@ ADMIN_HTML = r"""
     if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; loadGroups(); }
     else{ flash('Add failed'); }
   }
-
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
     if(r.ok){ flash('Deleted'); loadGroups(); }
     else{ flash('Delete failed'); }
   }
-
-  async function sendNowRandom(){
-    const r = await fetch('/api/send-now', { method:'POST' });
-    flash(r.ok? 'Sent':'Failed');
-  }
-
-  async function reloadJobs(){
-    const r = await fetch('/api/reload', { method:'POST' });
-    flash(r.ok? 'Reloaded':'Failed');
-    loadSchedules();
-  }
-
+  async function sendNowRandom(){ const r = await fetch('/api/send-now', { method:'POST' }); flash(r.ok? 'Sent':'Failed'); }
+  async function reloadJobs(){ const r = await fetch('/api/reload', { method:'POST' }); flash(r.ok? 'Reloaded':'Failed'); loadSchedules(); }
   async function loadSchedules(){
     const r = await fetch('/api/schedules'); const j = await r.json();
     const el = document.getElementById('schedules');
@@ -371,7 +404,6 @@ ADMIN_HTML = r"""
         <td><button class="danger" onclick="delSchedule(${s.hour},${s.minute})">Delete</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
-
   async function addSchedule(){
     const h = +document.getElementById('h').value; const m= +document.getElementById('m').value;
     const r = await fetch('/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hour:h, minute:m}) });
@@ -384,7 +416,46 @@ ADMIN_HTML = r"""
     else{ flash('Failed'); }
   }
 
-  loadAll();
+  // --- Users panel ---
+  let _users = [];
+  async function loadUsers(){
+    const r = await fetch('/api/users');
+    if(!r.ok){ document.getElementById('usersTable').innerHTML='<p class="muted">Unauthorized</p>'; return; }
+    _users = await r.json();
+    document.getElementById('userCount').textContent = _users.length;
+    renderUsers();
+  }
+  function renderUsers(){
+    const q = (document.getElementById('userSearch').value||'').trim();
+    const data = _users.filter(u => !q || String(u.chat_id).includes(q));
+    const el = document.getElementById('usersTable');
+    if(!data.length){ el.innerHTML = '<p class="muted">No users.</p>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>#</th><th>chat_id</th><th>Subscribed At</th><th></th></tr></thead>
+      <tbody>${data.map((u,i)=>`<tr>
+        <td>${i+1}</td>
+        <td>${u.chat_id}</td>
+        <td>${fmtTime(u.created_at)}</td>
+        <td><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+  async function delUser(chat_id){
+    if(!confirm('Remove this user?')) return;
+    const r = await fetch('/api/users/'+chat_id, { method:'DELETE' });
+    if(r.ok){ flash('Removed'); loadUsers(); }
+    else{ flash('Failed'); }
+  }
+  function exportUsersCSV(){
+    const rows = [['chat_id','created_at']].concat(_users.map(u=>[u.chat_id, u.created_at||'']));
+    const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // 首屏加载
+  switchPanel('dashboard');
 </script>
 </body>
 </html>
@@ -597,6 +668,22 @@ async def api_reload(request: Request, x_admin_key: Optional[str] = Header(None)
 async def api_send_now(request: Request, x_admin_key: Optional[str] = Header(None)):
     require_admin_access(request, x_admin_key)
     await send_daily_message()
+    return {"ok": True}
+
+# 列出已订阅用户（需要已登录）
+@app.get("/api/users")
+async def api_list_users(request: Request):
+    if not is_logged_in(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    with SessionLocal() as db:
+        rows = db.execute(select(User.chat_id, User.created_at).order_by(desc(User.created_at))).all()
+        return [{"chat_id": int(r[0]), "created_at": (r[1].isoformat() if r[1] else None)} for r in rows]
+
+# 删除（取消订阅）某个用户（需要：已登录 或 X-Admin-Key）
+@app.delete("/api/users/{chat_id}")
+async def api_delete_user(chat_id: int, request: Request, x_admin_key: Optional[str] = Header(None)):
+    require_admin_access(request, x_admin_key)
+    user_manager.remove(chat_id)
     return {"ok": True}
 
 if __name__ == "__main__":
