@@ -1,4 +1,4 @@
-python-telegram-bot==20.0
+python-telegram-bot==20.6
 apscheduler==3.10.4
 pytz==2024.1
 python-dotenv==1.0.0
@@ -6,3 +6,5 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 aiofiles==24.1.0
 python-multipart==0.0.9
+SQLAlchemy==2.0.32
+psycopg2-binary==2.9.9
