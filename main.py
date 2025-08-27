@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc
 
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
