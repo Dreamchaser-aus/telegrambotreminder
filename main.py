@@ -47,7 +47,7 @@ class UserManagerDB:
         with SessionLocal() as db:
             exists = db.scalar(select(User).where(User.chat_id == chat_id))
             if not exists:
-                db.add(User(chat_id=int(chat_id)))  # created_at 默认写入 UTC
+                db.add(User(chat_id=int(chat_id)))  # created_at 默认写入 UTC（见 models.py）
                 db.commit()
 
     def remove(self, chat_id: int):
@@ -152,8 +152,8 @@ class ScheduleManager:
         self.save_all(items)
 
 # --- Globals ---------------------------------------------------------------
-user_manager   = UserManagerDB()
-group_manager  = MessageGroupManager(GROUPS_FILE)
+user_manager     = UserManagerDB()
+group_manager    = MessageGroupManager(GROUPS_FILE)
 schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 
 telegram_app = None
@@ -182,8 +182,8 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Core sending logic -----------------------------------------------------
 async def send_daily_message():
-    group  = group_manager.random()
-    image  = None
+    group   = group_manager.random()
+    image   = None
     message = None
     if group:
         message = group.get("message") or DEFAULT_MESSAGE_TEMPLATE.format(
@@ -389,8 +389,9 @@ ADMIN_HTML = r'''
     if(name==='dashboard'){ loadGroups(); loadSchedules(); }
     if(name==='users'){ loadUsers(); }
   }
-  const escapeHtml = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-  const fmtLocalIso = (s)=> s ? s.replace('T',' ').replace(/\.\d+/, '') : '';
+  const escapeHtml    = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  // 方法1：仅前端简化显示为 YYYY-MM-DD HH:mm
+  const fmtLocalShort = (s)=> s ? s.substring(0,16).replace('T',' ') : '';
 
   // ===== Groups =====
   async function loadGroups(){
@@ -486,7 +487,7 @@ ADMIN_HTML = r'''
       <tbody>${data.map((u,i)=>`<tr>
         <td class="mono">${i+1}</td>
         <td class="mono">${u.chat_id}</td>
-        <td class="mono">${fmtLocalIso(u.created_at_local)}</td>
+        <td class="mono">${fmtLocalShort(u.created_at_local)}</td>
         <td class="actions"><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
@@ -496,8 +497,8 @@ ADMIN_HTML = r'''
     if(r.ok){ flash('Removed'); loadUsers(); } else { flash('Failed'); }
   }
   function exportUsersCSV(){
-    const rows = [['chat_id','created_at_utc','created_at_local','tz']]
-      .concat(_users.map(u=>[u.chat_id, u.created_at||'', u.created_at_local||'', u.tz||'']));
+    const rows = [['chat_id','created_at_utc','created_at_local(short)','tz']]
+      .concat(_users.map(u=>[u.chat_id, u.created_at||'', fmtLocalShort(u.created_at_local)||'', u.tz||'']));
     const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url  = URL.createObjectURL(blob);
@@ -512,7 +513,7 @@ ADMIN_HTML = r'''
 </html>
 '''
 
-LOGIN_HTML = r"""
+LOGIN_HTML = r'''
 <!DOCTYPE html>
 <html>
 <head>
@@ -541,7 +542,7 @@ LOGIN_HTML = r"""
   </form>
 </body>
 </html>
-"""
+'''
 
 # --- Lifespan：启动/停止 & 首次迁移 users.json ------------------------------
 @asynccontextmanager
@@ -584,7 +585,7 @@ async def lifespan(app: FastAPI):
                           minute=int(s.get("minute", 0)))
         logger.info(f"⏰ 已添加计划任务: {int(s.get('hour', 9)):02d}:{int(s.get('minute', 0)):02d}")
 
-    # 后台轮询
+    # 后台轮询（PTB v20）
     async def run_bot():
         await telegram_app.initialize()
         await telegram_app.start()
@@ -717,7 +718,7 @@ async def api_send_now(request: Request, x_admin_key: Optional[str] = Header(Non
     await send_daily_message()
     return {"ok": True}
 
-# 用户（按 TZ 返回本地时间字符串）
+# 用户（按 TZ 返回本地时间 ISO；前端用 substring(0,16) 显示到分钟）
 @app.get("/api/users")
 async def api_list_users(request: Request):
     if not is_logged_in(request):
