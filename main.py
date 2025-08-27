@@ -222,6 +222,7 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
     require_admin_header(x_admin_key)
 
 # --- Admin HTML / Login HTML ------------------------------------------------
+ADMIN_HTML = r'''
 <!DOCTYPE html>
 <html>
 <head>
@@ -509,6 +510,7 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
 </script>
 </body>
 </html>
+'''
 
 LOGIN_HTML = r"""
 <!DOCTYPE html>
