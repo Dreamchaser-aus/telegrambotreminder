@@ -6,21 +6,23 @@ load_dotenv()
 
 # Core
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_KEY = os.getenv("ADMIN_KEY", "")  # 兼容旧的 Header 方式（可选）
+ADMIN_KEY = os.getenv("ADMIN_KEY", "")  # 可选：兼容旧的 Header 方式
 TIMEZONE = os.getenv("TZ", "Asia/Kuala_Lumpur")
 
-# Admin 登录（推荐）
+# Admin 登录
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-# 如未显式设置 ADMIN_PASS，则回退用 ADMIN_KEY（便于渐进迁移）
 ADMIN_PASS = os.getenv("ADMIN_PASS") or os.getenv("ADMIN_KEY", "")
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-please")  # 用于签名会话 Cookie，务必在 Railway 设置为强随机串
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me-please")  # 用于会话签名
 
 # 数据目录（建议在 Railway 绑定 Volume 到 /data）
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# 文件与目录
-USER_FILE = os.path.join(DATA_DIR, "users.json")
+# 数据库：优先用环境里的 DATABASE_URL；否则回退到本地 SQLite（挂载 Volume 可持久化）
+DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{os.path.join(DATA_DIR, 'app.db')}"
+
+# 文件与目录（信息组/排程仍走文件；用户改用 DB）
+USER_FILE = os.path.join(DATA_DIR, "users.json")  # 仅用于首次迁移
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 MEDIA_DIR = os.path.join(DATA_DIR, "media")
 RANDOM_DIR = os.path.join(MEDIA_DIR, "random")
