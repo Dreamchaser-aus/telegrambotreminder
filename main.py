@@ -222,7 +222,6 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
     require_admin_header(x_admin_key)
 
 # --- Admin HTML / Login HTML ------------------------------------------------
-ADMIN_HTML = r"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -230,9 +229,12 @@ ADMIN_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Daily Sender Admin</title>
   <style>
-    :root{ --bg:#0b1320; --panel:#121d33; --line:#223054; --line2:#23365f; --text:#eef2ff; --muted:#9fb0d9; --accent:#2546f2; --danger:#b3363f; --ok:#21955e; }
-    *{ box-sizing: border-box; }
-    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:var(--bg); color:var(--text); }
+    :root{
+      --bg:#0b1320; --panel:#121d33; --line:#223054; --line2:#23365f;
+      --text:#eef2ff; --muted:#9fb0d9; --accent:#2546f2; --danger:#b3363f; --ok:#21955e;
+    }
+    *{ box-sizing:border-box; }
+    body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:var(--bg); color:var(--text); }
     header{ padding:16px 20px; background:#111a2e; border-bottom:1px solid #203055; display:flex; align-items:center; gap:12px; }
     h1{ margin:0; font-size:18px; }
     .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:220px 1fr; gap:16px; }
@@ -243,15 +245,12 @@ ADMIN_HTML = r"""
     section{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px; }
     h2{ margin:6px 0 14px; font-size:16px; }
     .row{ display:flex; gap:12px; flex-wrap:wrap; }
-    input, textarea, select, button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
-    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); }
+    input,textarea,select,button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
+    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); line-height:1.2; }
     button:disabled{ opacity:.6; }
     label{ font-size:12px; opacity:.85; display:block; margin-bottom:6px; }
     .grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     .muted{ opacity:.85; font-size:13px; color:var(--muted); }
-    table{ width:100%; border-collapse:collapse; table-layout:fixed; }
-    th,td{ border-bottom:1px solid var(--line2); padding:10px 8px; vertical-align:top; text-align:left; }
-    th:nth-child(1), td:nth-child(1){ width:56px; }
     .pill{ font-size:12px; padding:2px 8px; background:#1b2d52; border-radius:999px; border:1px solid #29437a; }
     .inline{ display:inline-flex; gap:8px; align-items:center; }
     .danger{ background:var(--danger); border-color:var(--danger); }
@@ -262,7 +261,33 @@ ADMIN_HTML = r"""
     .panel.active{ display:block; }
     .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#0f1a2d; border-radius:10px; margin-right:8px; }
     .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
-    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
+
+    /* 表格：避免重叠与溢出 */
+    table{
+      width:100%;
+      border-collapse:separate;     /* 比 collapse 更稳 */
+      border-spacing:0;
+      table-layout:auto;            /* 自适应列宽 */
+    }
+    th,td{
+      border-bottom:1px solid var(--line2);
+      padding:12px 10px;
+      vertical-align:middle;
+      text-align:left;
+    }
+    th:nth-child(1),td:nth-child(1){ width:56px; }     /* 序号列 */
+    th:nth-child(2),td:nth-child(2){ width:280px; }    /* 图片列 */
+    th:nth-child(4),td:nth-child(4){ width:130px; }    /* 操作列 */
+    th:nth-child(3),td:nth-child(3){ min-width:320px; }/* 文案列最小宽度 */
+    td.actions{ text-align:right; }
+    td .link{
+      display:inline-block; max-width:100%;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; /* 文件名过长省略 */
+    }
+    td .msg{
+      white-space:pre-wrap; word-break:break-word; /* 文案换行 */
+    }
   </style>
 </head>
 <body>
@@ -354,8 +379,8 @@ ADMIN_HTML = r"""
   <div id="flash"></div>
 
 <script>
-  // ===== UI helpers =====
-  const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500)};
+  // ===== Utilities =====
+  const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500); };
   function switchPanel(name){
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+name).classList.add('active');
@@ -363,40 +388,57 @@ ADMIN_HTML = r"""
     if(name==='dashboard'){ loadGroups(); loadSchedules(); }
     if(name==='users'){ loadUsers(); }
   }
+  const escapeHtml = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  const fmtLocalIso = (s)=> s ? s.replace('T',' ').replace(/\.\d+/, '') : '';
 
-  // ===== Dashboard =====
+  // ===== Groups =====
   async function loadGroups(){
-    const r = await fetch('/api/groups'); const j = await r.json();
+    const r  = await fetch('/api/groups');
+    const j  = await r.json();
     const el = document.getElementById('groups');
     if(!j.length){ el.innerHTML='<p class="muted">No groups yet.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>#</th><th>Image</th><th>Message</th><th></th></tr></thead>
-      <tbody>${j.map((g,i)=>`<tr>
-        <td class="mono">${i+1}</td>
-        <td>${g.image? `<span class="inline"><span class="pill">IMG</span> <a target="_blank" href="/media/${g.image}">${g.image}</a></span>` : '<span class="muted">None</span>'}</td>
-        <td style="white-space: pre-wrap;">${g.message.replaceAll('<','&lt;')}</td>
-        <td><button class="danger" onclick="delGroup(${i})">Delete</button></td>
-      </tr>`).join('')}</tbody></table>`;
+      <thead>
+        <tr><th class="mono">#</th><th>Image</th><th>Message</th><th></th></tr>
+      </thead>
+      <tbody>
+        ${j.map((g,i)=>`
+          <tr>
+            <td class="mono">${i+1}</td>
+            <td>
+              ${g.image
+                ? `<span class="inline">
+                     <span class="pill">IMG</span>
+                     <a class="link" target="_blank" href="/media/${encodeURIComponent(g.image)}">${escapeHtml(g.image)}</a>
+                   </span>`
+                : '<span class="muted">None</span>'
+              }
+            </td>
+            <td class="msg">${escapeHtml(g.message)}</td>
+            <td class="actions"><button class="danger" onclick="delGroup(${i})">Delete</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
   }
   async function addGroup(){
     const fd = new FormData();
-    const f = document.getElementById('image').files[0];
+    const f  = document.getElementById('image').files[0];
     if(f){ fd.append('file', f); }
     const msg = document.getElementById('message').value.trim();
     if(!msg){ flash('Message required'); return; }
     fd.append('message', msg);
-    const r = await fetch('/api/groups', { method:'POST', body: fd });
+    const r = await fetch('/api/groups', { method:'POST', body:fd });
     if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; loadGroups(); }
     else{ flash('Add failed'); }
   }
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); loadGroups(); }
-    else{ flash('Delete failed'); }
+    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Delete failed'); }
   }
-  async function sendNowRandom(){ const r = await fetch('/api/send-now', { method:'POST' }); flash(r.ok? 'Sent':'Failed'); }
-  async function reloadJobs(){ const r = await fetch('/api/reload', { method:'POST' }); flash(r.ok? 'Reloaded':'Failed'); loadSchedules(); }
+
+  // ===== Schedules =====
   async function loadSchedules(){
     const r = await fetch('/api/schedules'); const j = await r.json();
     const el = document.getElementById('schedules');
@@ -405,32 +447,33 @@ ADMIN_HTML = r"""
       <thead><tr><th>Time</th><th></th></tr></thead>
       <tbody>${j.map(s=>`<tr>
         <td class="mono">${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}</td>
-        <td><button class="danger" onclick="delSchedule(${s.hour},${s.minute})">Delete</button></td>
+        <td class="actions"><button class="danger" onclick="delSchedule(${s.hour},${s.minute})">Delete</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
   async function addSchedule(){
-    const h = +document.getElementById('h').value; const m = +document.getElementById('m').value;
-    const r = await fetch('/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hour:h, minute:m}) });
+    const h = +document.getElementById('h').value, m = +document.getElementById('m').value;
+    const r = await fetch('/api/schedules', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hour:h, minute:m})
+    });
     if(r.ok){ flash('Added'); reloadJobs(); } else { flash('Failed'); }
   }
   async function delSchedule(h,m){
     const r = await fetch(`/api/schedules/${h}/${m}`, { method:'DELETE' });
     if(r.ok){ flash('Deleted'); reloadJobs(); } else { flash('Failed'); }
   }
+  async function reloadJobs(){ const r = await fetch('/api/reload', { method:'POST' }); flash(r.ok?'Reloaded':'Failed'); loadSchedules(); }
+  async function sendNowRandom(){ const r = await fetch('/api/send-now', { method:'POST' }); flash(r.ok?'Sent':'Failed'); }
 
   // ===== Users =====
   let _users = [];
-  function fmtLocalIso(s){ return s ? s.replace('T',' ').replace(/\.\d+/, '') : ''; }
-
   async function loadUsers(){
     const r = await fetch('/api/users');
     const el = document.getElementById('usersTable');
-    if(!r.ok){ el.innerHTML='<p class="muted">Unauthorized</p>'; return; }
+    if(!r.ok){ el.innerHTML = '<p class="muted">Unauthorized</p>'; return; }
     _users = await r.json();
     document.getElementById('userCount').textContent = _users.length;
     renderUsers();
   }
-
   function renderUsers(){
     const q = (document.getElementById('userSearch').value||'').trim();
     const data = _users.filter(u => !q || String(u.chat_id).includes(q));
@@ -443,23 +486,21 @@ ADMIN_HTML = r"""
         <td class="mono">${i+1}</td>
         <td class="mono">${u.chat_id}</td>
         <td class="mono">${fmtLocalIso(u.created_at_local)}</td>
-        <td><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
+        <td class="actions"><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
-
   async function delUser(chat_id){
     if(!confirm('Remove this user?')) return;
     const r = await fetch('/api/users/'+chat_id, { method:'DELETE' });
     if(r.ok){ flash('Removed'); loadUsers(); } else { flash('Failed'); }
   }
-
   function exportUsersCSV(){
     const rows = [['chat_id','created_at_utc','created_at_local','tz']]
       .concat(_users.map(u=>[u.chat_id, u.created_at||'', u.created_at_local||'', u.tz||'']));
     const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'subscribed_users.csv'; a.click();
+    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -468,7 +509,6 @@ ADMIN_HTML = r"""
 </script>
 </body>
 </html>
-"""
 
 LOGIN_HTML = r"""
 <!DOCTYPE html>
