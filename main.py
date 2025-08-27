@@ -231,51 +231,78 @@ ADMIN_HTML = r'''
   <title>Daily Sender Admin</title>
   <style>
     :root{
-      --bg:#0b1320; --panel:#121d33; --line:#223054; --line2:#23365f;
-      --text:#eef2ff; --muted:#9fb0d9; --accent:#2546f2; --danger:#b3363f; --ok:#21955e;
+      --bg:#f7fafc; --panel:#ffffff; --line:#e5e7eb; --line2:#e5e7eb;
+      --text:#0f172a; --muted:#64748b; --accent:#2563eb; --danger:#dc2626; --ok:#16a34a;
     }
     *{ box-sizing:border-box; }
-    body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:var(--bg); color:var(--text); }
-    header{ padding:16px 20px; background:#111a2e; border-bottom:1px solid #203055; display:flex; align-items:center; gap:12px; }
-    h1{ margin:0; font-size:18px; }
-    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:220px 1fr; gap:16px; }
-    aside{ background:#111a2e; border:1px solid #203055; border-radius:14px; padding:10px; height:fit-content; position:sticky; top:14px; }
-    .navlink{ display:block; width:100%; text-align:left; border:1px solid var(--line); background:#0f1a2d; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer; }
-    .navlink.active{ background:var(--accent); border-color:var(--accent); }
+    html,body{ height:100%; }
+    body{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      margin:0; background:var(--bg); color:var(--text);
+    }
+    a{ color:var(--accent); text-decoration:none; }
+    a:hover{ text-decoration:underline; }
+    header{
+      padding:16px 20px; background:#ffffff; border-bottom:1px solid var(--line);
+      display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:5;
+    }
+    h1{ margin:0; font-size:18px; font-weight:600; }
+    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:230px 1fr; gap:16px; }
+    aside{
+      background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px;
+      height:fit-content; position:sticky; top:90px;
+    }
+    .navlink{
+      display:block; width:100%; text-align:left; border:1px solid var(--line);
+      background:#ffffff; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer;
+    }
+    .navlink:hover{ background:#f3f6fb; }
+    .navlink.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
     main{ display:block; }
-    section{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px; }
-    h2{ margin:6px 0 14px; font-size:16px; }
+    section{
+      background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    h2{ margin:6px 0 14px; font-size:16px; font-weight:600; }
     .row{ display:flex; gap:12px; flex-wrap:wrap; }
-    input,textarea,select,button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
-    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); line-height:1.2; }
-    button:disabled{ opacity:.6; }
-    label{ font-size:12px; opacity:.85; display:block; margin-bottom:6px; }
+    input,textarea,select,button{
+      font: inherit; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; background:#ffffff; color:var(--text);
+    }
+    textarea{ resize:vertical; }
+    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); color:#fff; line-height:1.2; }
+    button:hover{ filter:brightness(0.97); }
+    button:disabled{ opacity:.6; cursor:not-allowed; }
+    label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
     .grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-    .muted{ opacity:.85; font-size:13px; color:var(--muted); }
-    .pill{ font-size:12px; padding:2px 8px; background:#1b2d52; border-radius:999px; border:1px solid #29437a; }
+    .muted{ font-size:13px; color:var(--muted); }
+    .pill{ font-size:12px; padding:2px 8px; background:#eef2ff; color:#324aa8; border-radius:999px; border:1px solid #dbe4ff; }
     .inline{ display:inline-flex; gap:8px; align-items:center; }
     .danger{ background:var(--danger); border-color:var(--danger); }
     .success{ background:var(--ok); border-color:var(--ok); }
     .spacer{ flex:1; }
-    #flash{ position:fixed; right:16px; bottom:16px; background:#1c2c50; border:1px solid #2c4781; padding:10px 12px; border-radius:12px; display:none; }
+    #flash{
+      position:fixed; right:16px; bottom:16px; background:#111827; color:#fff;
+      border:1px solid #0b1220; padding:10px 12px; border-radius:12px; display:none;
+      box-shadow:0 8px 24px rgba(0,0,0,.15);
+    }
     .panel{ display:none; }
     .panel.active{ display:block; }
-    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#0f1a2d; border-radius:10px; margin-right:8px; }
+    .stat{
+      display:inline-block; padding:8px 10px; border:1px solid var(--line);
+      background:#ffffff; border-radius:10px; margin-right:8px;
+    }
     .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
-    .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
 
-    /* 表格：避免重叠与溢出 */
+    /* 表格：避免重叠与溢出（亮色） */
     table{
       width:100%;
-      border-collapse:separate;     /* 比 collapse 更稳 */
-      border-spacing:0;
-      table-layout:auto;            /* 自适应列宽 */
+      border-collapse:separate; border-spacing:0; table-layout:auto; background:#fff; border-radius:12px; overflow:hidden;
     }
+    thead th{ background:#f8fafc; }
     th,td{
       border-bottom:1px solid var(--line2);
-      padding:12px 10px;
-      vertical-align:middle;
-      text-align:left;
+      padding:12px 10px; vertical-align:middle; text-align:left;
     }
     th:nth-child(1),td:nth-child(1){ width:56px; }     /* 序号列 */
     th:nth-child(2),td:nth-child(2){ width:280px; }    /* 图片列 */
@@ -283,11 +310,13 @@ ADMIN_HTML = r'''
     th:nth-child(3),td:nth-child(3){ min-width:320px; }/* 文案列最小宽度 */
     td.actions{ text-align:right; }
     td .link{
-      display:inline-block; max-width:100%;
-      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; /* 文件名过长省略 */
+      display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
-    td .msg{
-      white-space:pre-wrap; word-break:break-word; /* 文案换行 */
+    td .msg{ white-space:pre-wrap; word-break:break-word; }
+    @media (max-width: 880px){
+      .grid{ grid-template-columns:1fr; }
+      .layout{ grid-template-columns:1fr; }
+      aside{ position:static; }
     }
   </style>
 </head>
@@ -389,8 +418,8 @@ ADMIN_HTML = r'''
     if(name==='dashboard'){ loadGroups(); loadSchedules(); }
     if(name==='users'){ loadUsers(); }
   }
-  const escapeHtml    = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-  // 方法1：仅前端简化显示为 YYYY-MM-DD HH:mm
+  const escapeHtml = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  // 前端简化显示为 YYYY-MM-DD HH:mm
   const fmtLocalShort = (s)=> s ? s.substring(0,16).replace('T',' ') : '';
 
   // ===== Groups =====
@@ -400,9 +429,7 @@ ADMIN_HTML = r'''
     const el = document.getElementById('groups');
     if(!j.length){ el.innerHTML='<p class="muted">No groups yet.</p>'; return; }
     el.innerHTML = `<table>
-      <thead>
-        <tr><th class="mono">#</th><th>Image</th><th>Message</th><th></th></tr>
-      </thead>
+      <thead><tr><th class="mono">#</th><th>Image</th><th>Message</th><th></th></tr></thead>
       <tbody>
         ${j.map((g,i)=>`
           <tr>
@@ -437,7 +464,7 @@ ADMIN_HTML = r'''
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Delete failed'); }
+    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Failed'); }
   }
 
   // ===== Schedules =====
