@@ -1,12 +1,12 @@
-# FastAPI admin + Telegram bot (python-telegram-bot v20.6) + APScheduler + SQLAlchemy(DB)
-# - 已订阅用户存数据库（Postgres/SQLite）
-# - 首次启动自动把旧 users.json 迁移进 DB（若 DB 为空）
-# - 登录保护管理面板（SessionMiddleware）
+# FastAPI admin + Telegram bot (python-telegram-bot v20.6) + APScheduler + SQLAlchemy
+# - 用户订阅存数据库（UTC 带时区），API 输出会按 TZ（如 Asia/Kuala_Lumpur）返回
+# - 左侧 Sidebar：Dashboard（信息组/定时/工具） + Users（订阅用户）
+# - 登录保护（SessionMiddleware），兼容 X-Admin-Key 作为后备
 import os
 import json
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -47,7 +47,7 @@ class UserManagerDB:
         with SessionLocal() as db:
             exists = db.scalar(select(User).where(User.chat_id == chat_id))
             if not exists:
-                db.add(User(chat_id=int(chat_id)))
+                db.add(User(chat_id=int(chat_id)))  # created_at 默认写入 UTC
                 db.commit()
 
     def remove(self, chat_id: int):
@@ -72,6 +72,7 @@ class MessageGroupManager:
         self.groups_file = groups_file
         self.groups: List[dict] = self._load()
         os.makedirs(MEDIA_DIR, exist_ok=True)
+        # 规范化图片文件名
         for g in self.groups:
             if "image" in g and g["image"]:
                 g["image"] = os.path.basename(g["image"])
@@ -99,7 +100,7 @@ class MessageGroupManager:
     def add(self, image_filename: Optional[str], message: str):
         self.groups.append({
             "image": os.path.basename(image_filename) if image_filename else None,
-            "message": message.strip()
+            "message": message.strip(),
         })
         self.save()
 
@@ -141,7 +142,7 @@ class ScheduleManager:
     def add(self, hour: int, minute: int):
         items = self.list()
         items.append({"hour": int(hour), "minute": int(minute)})
-        uniq = {(x["hour"], x["minute"]) for x in items}
+        uniq  = {(x["hour"], x["minute"]) for x in items}
         items = [{"hour": h, "minute": m} for (h, m) in sorted(uniq)]
         self.save_all(items)
 
@@ -151,12 +152,12 @@ class ScheduleManager:
         self.save_all(items)
 
 # --- Globals ---------------------------------------------------------------
-user_manager = UserManagerDB()
-group_manager = MessageGroupManager(GROUPS_FILE)
+user_manager   = UserManagerDB()
+group_manager  = MessageGroupManager(GROUPS_FILE)
 schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 
 telegram_app = None
-scheduler = AsyncIOScheduler(timezone=TZ)
+scheduler    = AsyncIOScheduler(timezone=TZ)
 
 # --- Telegram handlers ------------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,11 +182,13 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Core sending logic -----------------------------------------------------
 async def send_daily_message():
-    group = group_manager.random()
-    image = None
+    group  = group_manager.random()
+    image  = None
     message = None
     if group:
-        message = group.get("message") or DEFAULT_MESSAGE_TEMPLATE.format(time=datetime.now(TZ).strftime("%H:%M"))
+        message = group.get("message") or DEFAULT_MESSAGE_TEMPLATE.format(
+            time=datetime.now(TZ).strftime("%H:%M")
+        )
         if group.get("image"):
             candidate = os.path.join(MEDIA_DIR, group["image"])
             if os.path.exists(candidate):
@@ -205,7 +208,7 @@ async def send_daily_message():
         except Exception as e:
             logger.error(f"发送给 {uid} 失败: {e}")
 
-# --- Auth helpers (登录 + 兼容 Header 授权) ---------------------------------
+# --- Auth helpers -----------------------------------------------------------
 def is_logged_in(request: Request) -> bool:
     return request.session.get("auth") == "ok"
 
@@ -229,35 +232,37 @@ ADMIN_HTML = r"""
   <style>
     :root{ --bg:#0b1320; --panel:#121d33; --line:#223054; --line2:#23365f; --text:#eef2ff; --muted:#9fb0d9; --accent:#2546f2; --danger:#b3363f; --ok:#21955e; }
     *{ box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: var(--bg); color: var(--text); }
-    header { padding: 16px 20px; background: #111a2e; border-bottom: 1px solid #203055; display:flex; align-items:center; gap:12px; }
-    h1 { margin: 0; font-size: 18px; }
-    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns: 220px 1fr; gap:16px; }
-    aside{ background:#111a2e; border:1px solid #203055; border-radius:14px; padding:10px; height: fit-content; position:sticky; top:14px; }
+    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:var(--bg); color:var(--text); }
+    header{ padding:16px 20px; background:#111a2e; border-bottom:1px solid #203055; display:flex; align-items:center; gap:12px; }
+    h1{ margin:0; font-size:18px; }
+    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:220px 1fr; gap:16px; }
+    aside{ background:#111a2e; border:1px solid #203055; border-radius:14px; padding:10px; height:fit-content; position:sticky; top:14px; }
     .navlink{ display:block; width:100%; text-align:left; border:1px solid var(--line); background:#0f1a2d; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer; }
-    .navlink.active{ background: var(--accent); border-color: var(--accent); }
-    main { display:block; }
-    section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 18px; }
-    h2 { margin: 6px 0 14px; font-size: 16px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; }
-    input, textarea, select, button { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #334770; background: #0f1a2d; color: #eaf0ff; }
-    button { cursor: pointer; background: var(--accent); border-color: var(--accent); }
-    button:disabled{ opacity: .6; }
-    label { font-size: 12px; opacity: .85; display:block; margin-bottom: 6px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .muted { opacity: .85; font-size: 13px; color: var(--muted); }
-    table{ width:100%; border-collapse: collapse; }
-    th, td{ border-bottom:1px solid var(--line2); padding: 10px 8px; vertical-align: top; }
-    .pill{ font-size:12px; padding:2px 8px; background:#1b2d52; border-radius:999px; border:1px solid #29437a;}
-    .inline{ display:inline-flex; gap:8px; align-items:center;}
-    .danger{ background:var(--danger); border-color:var(--danger);}
-    .success{ background:var(--ok); border-color:var(--ok);}
-    #flash{ position: fixed; right:16px; bottom:16px; background:#1c2c50; border:1px solid #2c4781; padding:10px 12px; border-radius:12px; display:none; }
-    .spacer{flex:1}
+    .navlink.active{ background:var(--accent); border-color:var(--accent); }
+    main{ display:block; }
+    section{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px; }
+    h2{ margin:6px 0 14px; font-size:16px; }
+    .row{ display:flex; gap:12px; flex-wrap:wrap; }
+    input, textarea, select, button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
+    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); }
+    button:disabled{ opacity:.6; }
+    label{ font-size:12px; opacity:.85; display:block; margin-bottom:6px; }
+    .grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .muted{ opacity:.85; font-size:13px; color:var(--muted); }
+    table{ width:100%; border-collapse:collapse; table-layout:fixed; }
+    th,td{ border-bottom:1px solid var(--line2); padding:10px 8px; vertical-align:top; text-align:left; }
+    th:nth-child(1), td:nth-child(1){ width:56px; }
+    .pill{ font-size:12px; padding:2px 8px; background:#1b2d52; border-radius:999px; border:1px solid #29437a; }
+    .inline{ display:inline-flex; gap:8px; align-items:center; }
+    .danger{ background:var(--danger); border-color:var(--danger); }
+    .success{ background:var(--ok); border-color:var(--ok); }
+    .spacer{ flex:1; }
+    #flash{ position:fixed; right:16px; bottom:16px; background:#1c2c50; border:1px solid #2c4781; padding:10px 12px; border-radius:12px; display:none; }
     .panel{ display:none; }
     .panel.active{ display:block; }
-    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#0f1a2d; border-radius:10px; margin-right:8px;}
+    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#0f1a2d; border-radius:10px; margin-right:8px; }
     .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
   </style>
 </head>
 <body>
@@ -274,7 +279,7 @@ ADMIN_HTML = r"""
     </aside>
 
     <main>
-      <!-- DASHBOARD 面板（你的原有功能） -->
+      <!-- DASHBOARD -->
       <div id="panel-dashboard" class="panel active">
         <section>
           <h2>Add Message Group</h2>
@@ -328,7 +333,7 @@ ADMIN_HTML = r"""
         </section>
       </div>
 
-      <!-- USERS 面板 -->
+      <!-- USERS -->
       <div id="panel-users" class="panel">
         <section>
           <h2>Subscribed Users</h2>
@@ -349,7 +354,7 @@ ADMIN_HTML = r"""
   <div id="flash"></div>
 
 <script>
-  // --- UI helpers ---
+  // ===== UI helpers =====
   const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500)};
   function switchPanel(name){
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
@@ -358,9 +363,8 @@ ADMIN_HTML = r"""
     if(name==='dashboard'){ loadGroups(); loadSchedules(); }
     if(name==='users'){ loadUsers(); }
   }
-  const fmtTime = (s)=>{ try{ const d=new Date(s); return d.toLocaleString(); }catch(e){ return s||'' } };
 
-  // --- Dashboard functions (原有) ---
+  // ===== Dashboard =====
   async function loadGroups(){
     const r = await fetch('/api/groups'); const j = await r.json();
     const el = document.getElementById('groups');
@@ -368,7 +372,7 @@ ADMIN_HTML = r"""
     el.innerHTML = `<table>
       <thead><tr><th>#</th><th>Image</th><th>Message</th><th></th></tr></thead>
       <tbody>${j.map((g,i)=>`<tr>
-        <td>${i+1}</td>
+        <td class="mono">${i+1}</td>
         <td>${g.image? `<span class="inline"><span class="pill">IMG</span> <a target="_blank" href="/media/${g.image}">${g.image}</a></span>` : '<span class="muted">None</span>'}</td>
         <td style="white-space: pre-wrap;">${g.message.replaceAll('<','&lt;')}</td>
         <td><button class="danger" onclick="delGroup(${i})">Delete</button></td>
@@ -400,61 +404,66 @@ ADMIN_HTML = r"""
     el.innerHTML = `<table>
       <thead><tr><th>Time</th><th></th></tr></thead>
       <tbody>${j.map(s=>`<tr>
-        <td>${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}</td>
+        <td class="mono">${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}</td>
         <td><button class="danger" onclick="delSchedule(${s.hour},${s.minute})">Delete</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
   async function addSchedule(){
-    const h = +document.getElementById('h').value; const m= +document.getElementById('m').value;
+    const h = +document.getElementById('h').value; const m = +document.getElementById('m').value;
     const r = await fetch('/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hour:h, minute:m}) });
-    if(r.ok){ flash('Added'); reloadJobs(); }
-    else{ flash('Failed'); }
+    if(r.ok){ flash('Added'); reloadJobs(); } else { flash('Failed'); }
   }
   async function delSchedule(h,m){
     const r = await fetch(`/api/schedules/${h}/${m}`, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); reloadJobs(); }
-    else{ flash('Failed'); }
+    if(r.ok){ flash('Deleted'); reloadJobs(); } else { flash('Failed'); }
   }
 
-  // --- Users panel ---
+  // ===== Users =====
   let _users = [];
+  function fmtLocalIso(s){ return s ? s.replace('T',' ').replace(/\.\d+/, '') : ''; }
+
   async function loadUsers(){
     const r = await fetch('/api/users');
-    if(!r.ok){ document.getElementById('usersTable').innerHTML='<p class="muted">Unauthorized</p>'; return; }
+    const el = document.getElementById('usersTable');
+    if(!r.ok){ el.innerHTML='<p class="muted">Unauthorized</p>'; return; }
     _users = await r.json();
     document.getElementById('userCount').textContent = _users.length;
     renderUsers();
   }
+
   function renderUsers(){
     const q = (document.getElementById('userSearch').value||'').trim();
     const data = _users.filter(u => !q || String(u.chat_id).includes(q));
     const el = document.getElementById('usersTable');
     if(!data.length){ el.innerHTML = '<p class="muted">No users.</p>'; return; }
+    const tz = (data[0] && data[0].tz) ? data[0].tz : 'Local';
     el.innerHTML = `<table>
-      <thead><tr><th>#</th><th>chat_id</th><th>Subscribed At</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>chat_id</th><th>Subscribed (${tz})</th><th></th></tr></thead>
       <tbody>${data.map((u,i)=>`<tr>
-        <td>${i+1}</td>
-        <td>${u.chat_id}</td>
-        <td>${fmtTime(u.created_at)}</td>
+        <td class="mono">${i+1}</td>
+        <td class="mono">${u.chat_id}</td>
+        <td class="mono">${fmtLocalIso(u.created_at_local)}</td>
         <td><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
+
   async function delUser(chat_id){
     if(!confirm('Remove this user?')) return;
     const r = await fetch('/api/users/'+chat_id, { method:'DELETE' });
-    if(r.ok){ flash('Removed'); loadUsers(); }
-    else{ flash('Failed'); }
+    if(r.ok){ flash('Removed'); loadUsers(); } else { flash('Failed'); }
   }
+
   function exportUsersCSV(){
-    const rows = [['chat_id','created_at']].concat(_users.map(u=>[u.chat_id, u.created_at||'']));
-    const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\\n');
+    const rows = [['chat_id','created_at_utc','created_at_local','tz']]
+      .concat(_users.map(u=>[u.chat_id, u.created_at||'', u.created_at_local||'', u.tz||'']));
+    const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click();
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'subscribed_users.csv'; a.click();
     URL.revokeObjectURL(url);
   }
 
-  // 首屏加载
+  // 初始进入 Dashboard
   switchPanel('dashboard');
 </script>
 </body>
@@ -469,13 +478,13 @@ LOGIN_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Login</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#0b1320; color:#eef2ff; display:flex; align-items:center; justify-content:center; min-height:100vh;}
-    form { width: min(92vw, 420px); background:#121d33; border:1px solid #223054; border-radius:14px; padding:22px; }
-    h1 { margin:0 0 12px; font-size:18px;}
-    label{ font-size:12px; opacity:.85; display:block; margin:10px 0 6px;}
+    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#0b1320; color:#eef2ff; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+    form{ width:min(92vw,420px); background:#121d33; border:1px solid #223054; border-radius:14px; padding:22px; }
+    h1{ margin:0 0 12px; font-size:18px; }
+    label{ font-size:12px; opacity:.85; display:block; margin:10px 0 6px; }
     input,button{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
-    button{ margin-top:12px; background:#2546f2; border-color:#2546f2; cursor:pointer;}
-    .err{ color:#ff8f8f; margin:8px 0 0; font-size:13px; min-height:1.2em;}
+    button{ margin-top:12px; background:#2546f2; border-color:#2546f2; cursor:pointer; }
+    .err{ color:#ff8f8f; margin:8px 0 0; font-size:13px; min-height:1.2em; }
   </style>
 </head>
 <body>
@@ -495,11 +504,10 @@ LOGIN_HTML = r"""
 # --- Lifespan：启动/停止 & 首次迁移 users.json ------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 初始化数据库 & 迁移旧 users.json
+    # 初始化数据库 & 迁移旧 users.json（若 DB 为空）
     init_db()
     try:
         if os.path.exists(USER_FILE):
-            from sqlalchemy import select as _select
             with SessionLocal() as db:
                 count = db.scalar(select(func.count()).select_from(User))
                 if not count:
@@ -508,7 +516,7 @@ async def lifespan(app: FastAPI):
                         if isinstance(data, list):
                             for cid in data:
                                 try:
-                                    db.add(User(chat_id=int(cid)))
+                                    db.add(User(chat_id=int(cid)))  # UTC 默认时间
                                 except Exception:
                                     pass
                             db.commit()
@@ -529,7 +537,9 @@ async def lifespan(app: FastAPI):
     for job in scheduler.get_jobs():
         job.remove()
     for s in schedule_manager.list():
-        scheduler.add_job(send_daily_message, "cron", hour=int(s.get("hour", 9)), minute=int(s.get("minute", 0)))
+        scheduler.add_job(send_daily_message, "cron",
+                          hour=int(s.get("hour", 9)),
+                          minute=int(s.get("minute", 0)))
         logger.info(f"⏰ 已添加计划任务: {int(s.get('hour', 9)):02d}:{int(s.get('minute', 0)):02d}")
 
     # 后台轮询
@@ -538,21 +548,16 @@ async def lifespan(app: FastAPI):
         await telegram_app.start()
         if getattr(telegram_app, "updater", None):
             await telegram_app.updater.start_polling()
-        while True:
-            await asyncio.sleep(3600)
-
     asyncio.create_task(run_bot())
     logger.info("✅ Startup complete: admin + bot running")
+
     yield
-    try:
-        scheduler.shutdown(wait=False)
-    except Exception:
-        pass
+
+    try: scheduler.shutdown(wait=False)
+    except Exception: pass
     if telegram_app:
-        try:
-            await telegram_app.stop()
-        except Exception:
-            pass
+        try:    await telegram_app.stop()
+        except: pass
 
 # --- App 初始化 & 路由 -------------------------------------------------------
 app = FastAPI(title="Daily Sender Admin", lifespan=lifespan)
@@ -586,7 +591,8 @@ async def do_logout(request: Request):
 async def health():
     return {"ok": True, "time": datetime.utcnow().isoformat()}
 
-# APIs（需登录 或 X-Admin-Key）
+# === APIs（登录或 X-Admin-Key） ============================================
+# 信息组
 @app.get("/api/groups")
 async def api_groups(request: Request):
     if not is_logged_in(request):
@@ -610,7 +616,6 @@ async def api_add_group(
         with open(dest, "wb") as f:
             f.write(content)
         filename = safe
-
     group_manager.add(filename, message)
     return {"ok": True}
 
@@ -623,6 +628,7 @@ async def api_del_group(idx: int, request: Request, x_admin_key: Optional[str] =
     except IndexError:
         raise HTTPException(status_code=404, detail="Group not found")
 
+# 定时
 @app.get("/api/schedules")
 async def api_list_schedules(request: Request):
     if not is_logged_in(request):
@@ -648,7 +654,6 @@ async def api_add_schedule(payload: dict, request: Request, x_admin_key: Optiona
 async def api_del_schedule(hour: int, minute: int, request: Request, x_admin_key: Optional[str] = Header(None)):
     require_admin_access(request, x_admin_key)
     schedule_manager.delete(hour, minute)
-    # 立即重载
     for job in scheduler.get_jobs():
         job.remove()
     for s in schedule_manager.list():
@@ -670,16 +675,31 @@ async def api_send_now(request: Request, x_admin_key: Optional[str] = Header(Non
     await send_daily_message()
     return {"ok": True}
 
-# 列出已订阅用户（需要已登录）
+# 用户（按 TZ 返回本地时间字符串）
 @app.get("/api/users")
 async def api_list_users(request: Request):
     if not is_logged_in(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     with SessionLocal() as db:
         rows = db.execute(select(User.chat_id, User.created_at).order_by(desc(User.created_at))).all()
-        return [{"chat_id": int(r[0]), "created_at": (r[1].isoformat() if r[1] else None)} for r in rows]
 
-# 删除（取消订阅）某个用户（需要：已登录 或 X-Admin-Key）
+    out = []
+    for chat_id, created_at in rows:
+        if created_at is None:
+            out.append({"chat_id": int(chat_id), "created_at": None, "created_at_local": None, "tz": TIMEZONE})
+            continue
+        # 若 DB 中是 naive 时间，则按 UTC 处理
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        local_dt = created_at.astimezone(TZ)
+        out.append({
+            "chat_id": int(chat_id),
+            "created_at": created_at.astimezone(timezone.utc).isoformat(),  # UTC
+            "created_at_local": local_dt.isoformat(),                        # 按 TZ
+            "tz": TIMEZONE
+        })
+    return out
+
 @app.delete("/api/users/{chat_id}")
 async def api_delete_user(chat_id: int, request: Request, x_admin_key: Optional[str] = Header(None)):
     require_admin_access(request, x_admin_key)
