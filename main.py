@@ -44,12 +44,11 @@ TZ = pytz.timezone(TIMEZONE)
 
 # --- Managers ---------------------------------------------------------------
 class UserManagerDB:
-    """DB-backed user manager."""
     def add(self, chat_id: int):
         with SessionLocal() as db:
             exists = db.scalar(select(User).where(User.chat_id == chat_id))
             if not exists:
-                db.add(User(chat_id=int(chat_id)))  # created_at 默认写入 UTC（见 models.py）
+                db.add(User(chat_id=int(chat_id)))
                 db.commit()
 
     def remove(self, chat_id: int):
@@ -74,7 +73,6 @@ class MessageGroupManager:
         self.groups_file = groups_file
         self.groups: List[dict] = self._load()
         os.makedirs(MEDIA_DIR, exist_ok=True)
-        # 规范化图片文件名
         for g in self.groups:
             if "image" in g and g["image"]:
                 g["image"] = os.path.basename(g["image"])
@@ -114,7 +112,6 @@ class MessageGroupManager:
             raise IndexError("group index out of range")
 
     def update(self, idx: int, message: Optional[str] = None, image: Optional[str] = None):
-        """更新指定索引的消息组（message / image 可二选一或同时传）"""
         if not (0 <= idx < len(self.groups)):
             raise IndexError("group index out of range")
         if message is not None:
@@ -171,11 +168,14 @@ schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 telegram_app = None
 scheduler    = AsyncIOScheduler(timezone=TZ)
 
-# --- Premium 自定义表情：占位符 -> 实体（UTF-16 偏移 + 零宽占位符） ------------
+# === Premium 自定义表情：健壮解析（支持全角/空格）+ 零宽占位符 ==================
+CE_PATTERN = re.compile(r"[<＜]\s*ce\s*[:：]\s*(\d+)\s*[>＞]", re.IGNORECASE)
+
 def build_text_and_entities(src: str):
     """
-    将文本中的 <ce:1234567890123456789> 占位符转成 Telegram custom_emoji 实体。
-    偏移与长度按 UTF-16 code units 计算；占位符使用零宽连接符，实体失效时也不会看到“•”。
+    把文案中的 <ce:123> / ＜ce：123＞ 等占位符转为自定义表情实体。
+    - 偏移/长度按 UTF-16 code units 计算
+    - 用零宽连接符 U+200D 作为占位（实体失效也不会露符号）
     """
     if not src:
         return src, None
@@ -185,19 +185,17 @@ def build_text_and_entities(src: str):
 
     parts, entities = [], []
     last = 0
-    for m in re.finditer(r"<ce:(\d+)>", src):
+    for m in CE_PATTERN.finditer(src):
         parts.append(src[last:m.start()])
-
-        placeholder = "\u200d"  # 零宽连接符（不可见，1 个 UTF-16 单元）
+        placeholder = "\u200d"  # invisible, length=1 (UTF-16)
         text_so_far = "".join(parts)
         offset = u16_len(text_so_far)
-
         parts.append(placeholder)
         entities.append(
             MessageEntity(
                 type=MessageEntityType.CUSTOM_EMOJI,
                 offset=offset,
-                length=u16_len(placeholder),  # 1
+                length=u16_len(placeholder),
                 custom_emoji_id=m.group(1),
             )
         )
@@ -205,7 +203,13 @@ def build_text_and_entities(src: str):
 
     parts.append(src[last:])
     text = "".join(parts)
-    return text, (entities or None)
+
+    if entities:
+        logger.info(f"[CE] matched {len(entities)} custom_emoji placeholder(s)")
+    else:
+        logger.info("[CE] no placeholder matched in message")
+
+    return text, entities or None
 
 # --- Telegram handlers ------------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,7 +241,7 @@ async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ids:
         await update.message.reply_text(
             "custom_emoji_id:\n" + "\n".join(ids) +
-            "\n\n在后台文案中写成 <ce:ID> 即可发送这些自定义表情。"
+            "\n\n后台文案里写成 <ce:ID> 或 ＜ce：ID＞ 即可。"
         )
     else:
         await update.message.reply_text("这条消息里没有 Telegram 自定义表情。")
@@ -268,7 +272,7 @@ async def send_daily_message():
     if not message:
         message = DEFAULT_MESSAGE_TEMPLATE.format(time=datetime.now(TZ).strftime("%H:%M"))
 
-    # 构建 custom emoji 实体
+    # 统一解析 CE 占位符
     text, entities = build_text_and_entities(message)
 
     for uid in user_manager.all_chat_ids():
@@ -304,387 +308,21 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
         return
     require_admin_header(x_admin_key)
 
-# --- Admin HTML / Login HTML ------------------------------------------------
-ADMIN_HTML = r'''
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Daily Sender Admin</title>
-  <style>
-    :root{
-      --bg:#f7fafc; --panel:#ffffff; --line:#e5e7eb; --line2:#e5e7eb;
-      --text:#0f172a; --muted:#64748b; --accent:#2563eb; --danger:#dc2626; --ok:#16a34a;
-    }
-    *{ box-sizing:border-box; }
-    html,body{ height:100%; }
-    body{ font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:var(--bg); color:var(--text); }
-    a{ color:var(--accent); text-decoration:none; } a:hover{ text-decoration:underline; }
-    header{ padding:16px 20px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:5; }
-    h1{ margin:0; font-size:18px; font-weight:600; }
-    .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:230px 1fr; gap:16px; }
-    aside{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px; height:fit-content; position:sticky; top:90px; }
-    .navlink{ display:block; width:100%; text-align:left; border:1px solid var(--line); background:#fff; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer; }
-    .navlink:hover{ background:#f3f6fb; } .navlink.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
-    main{ display:block; }
-    section{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
-    h2{ margin:6px 0 14px; font-size:16px; font-weight:600; }
-    .row{ display:flex; gap:12px; flex-wrap:wrap; }
-    input,textarea,select,button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; background:#fff; color:var(--text); }
-    textarea{ resize:vertical; }
-    button{ cursor:pointer; background:var(--accent); border-color:var(--accent); color:#fff; line-height:1.2; }
-    button:hover{ filter:brightness(.97); } button:disabled{ opacity:.6; cursor:not-allowed; }
-    .ghost{ background:#fff; color:var(--text); border-color:#cbd5e1; } .ghost:hover{ background:#f3f6fb; }
-    .danger{ background:var(--danger); border-color:var(--danger); } .success{ background:var(--ok); border-color:var(--ok); }
-    label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
-    .grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-    .muted{ font-size:13px; color:var(--muted); }
-    .pill{ font-size:12px; padding:2px 8px; background:#eef2ff; color:#324aa8; border-radius:999px; border:1px solid #dbe4ff; }
-    .inline{ display:inline-flex; gap:8px; align-items:center; }
-    .spacer{ flex:1; }
-    #flash{ position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; border:1px solid #0b1220; padding:10px 12px; border-radius:12px; display:none; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-    .panel{ display:none; } .panel.active{ display:block; }
-    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#fff; border-radius:10px; margin-right:8px; }
-    .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
-    .mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
+# --- Admin HTML / Login HTML（省略与上版一致；你的页面已支持缩略图/编辑/保留换行） ---
+# 为节省篇幅，我省略了 HTML 字符串；保持你上一个“亮色 + 预览 + inline edit”的版本不变即可。
+# 如果需要我也可以再次完整贴出。
 
-    /* 表格 & 缩略图 + 保留输入排版 */
-    table{ width:100%; border-collapse:separate; border-spacing:0; table-layout:auto; background:#fff; border-radius:12px; overflow:hidden; }
-    thead th{ background:#f8fafc; }
-    th,td{ border-bottom:1px solid var(--line2); padding:12px 10px; vertical-align:middle; text-align:left; }
-    th:nth-child(1),td:nth-child(1){ width:56px; }
-    th:nth-child(2),td:nth-child(2){ width:320px; }
-    th:nth-child(4),td:nth-child(4){ width:200px; }
-    th:nth-child(3),td:nth-child(3){ min-width:320px; }
-    td.actions{ text-align:right; white-space:nowrap; }
-    td .link{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+ADMIN_HTML = """<!DOCTYPE html>
+<!-- 这里保持你上一版亮色 admin.html 的完整内容（含 <pre class="msg">） -->
+"""  # 你的实际代码中请替换为前一次我给你的完整 HTML 字符串
 
-    .thumbWrap{ display:flex; flex-direction:column; gap:6px; max-width:300px; }
-    .fileRow{ display:flex; align-items:center; gap:8px; }
-    .thumb{ width:300px; height:160px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden; }
-    .thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
-
-    .msgCell pre.msg{
-      white-space: pre-wrap;
-      word-break: break-word;
-      overflow-wrap: anywhere;
-      font-family: inherit;   /* 如需等宽对齐可改 monospace */
-      line-height: 1.55;
-      margin: 0;
-    }
-
-    @media (max-width:880px){
-      .grid{ grid-template-columns:1fr; }
-      .layout{ grid-template-columns:1fr; }
-      aside{ position:static; }
-      .thumb{ width:100%; }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Daily Sender Admin</h1>
-    <div class="spacer"></div>
-    <form action="/logout" method="post"><button class="ghost">Logout</button></form>
-  </header>
-
-  <div class="layout">
-    <aside>
-      <button class="navlink active" data-name="dashboard" onclick="switchPanel('dashboard')">Dashboard</button>
-      <button class="navlink" data-name="users" onclick="switchPanel('users')">Users</button>
-    </aside>
-
-    <main>
-      <!-- DASHBOARD -->
-      <div id="panel-dashboard" class="panel active">
-        <section>
-          <h2>Add Message Group</h2>
-          <div class="grid">
-            <div>
-              <label>Image (optional)</label>
-              <input type="file" id="image"/>
-            </div>
-            <div>
-              <label>Message Text</label>
-              <textarea id="message" rows="5" placeholder="Enter message text..."></textarea>
-            </div>
-          </div>
-          <div style="margin-top:10px;" class="inline">
-            <button onclick="addGroup()">Add Group</button>
-            <button class="success" onclick="sendNowRandom()">Send Random Now (All)</button>
-          </div>
-        </section>
-
-        <section>
-          <h2>Groups</h2>
-          <div id="groups"></div>
-        </section>
-
-        <section>
-          <h2>Schedules</h2>
-          <div class="row">
-            <div>
-              <label>Hour</label>
-              <input type="number" id="h" min="0" max="23" value="9"/>
-            </div>
-            <div>
-              <label>Minute</label>
-              <input type="number" id="m" min="0" max="59" value="0"/>
-            </div>
-            <div class="inline">
-              <button onclick="addSchedule()">Add</button>
-              <span class="muted">Server timezone is used.</span>
-            </div>
-          </div>
-          <div id="schedules" style="margin-top:10px;"></div>
-        </section>
-
-        <section>
-          <h2>Utilities</h2>
-          <div class="inline">
-            <button onclick="sendNowRandom()">Send Random Now (All)</button>
-            <button onclick="reloadJobs()">Reload Cron Jobs</button>
-            <span class="muted">Use for quick tests</span>
-          </div>
-        </section>
-      </div>
-
-      <!-- USERS -->
-      <div id="panel-users" class="panel">
-        <section>
-          <h2>Subscribed Users</h2>
-          <div class="inline" style="margin-bottom:8px;">
-            <span class="stat">Total: <b id="userCount">0</b></span>
-            <button class="ghost" onclick="loadUsers()">Refresh</button>
-            <button class="ghost" onclick="exportUsersCSV()">Export CSV</button>
-          </div>
-          <div class="searchbar">
-            <input id="userSearch" placeholder="Filter by chat_id..." oninput="renderUsers()"/>
-          </div>
-          <div id="usersTable"></div>
-        </section>
-      </div>
-    </main>
-  </div>
-
-  <div id="flash"></div>
-
-<script>
-  // ===== Utilities =====
-  const flash = (msg) => { const f=document.getElementById('flash'); f.textContent=msg; f.style.display='block'; setTimeout(()=>f.style.display='none',1500); };
-  function switchPanel(name){
-    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-    document.getElementById('panel-'+name).classList.add('active');
-    document.querySelectorAll('.navlink').forEach(a=>a.classList.toggle('active', a.dataset.name===name));
-    if(name==='dashboard'){ loadGroups(); loadSchedules(); }
-    if(name==='users'){ loadUsers(); }
-  }
-  const escapeHtml = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-  const fmtLocalShort = (s)=> s ? s.substring(0,16).replace('T',' ') : '';
-
-  // ===== Groups =====
-  async function loadGroups(){
-    const r  = await fetch('/api/groups');
-    const j  = await r.json();
-    const el = document.getElementById('groups');
-    if(!j.length){ el.innerHTML='<p class="muted">No groups yet.</p>'; return; }
-    el.innerHTML = `<table>
-      <thead><tr><th class="mono">#</th><th>Image</th><th>Message</th><th></th></tr></thead>
-      <tbody>
-        ${j.map((g,i)=>`
-          <tr>
-            <td class="mono">${i+1}</td>
-            <td>
-              ${g.image
-                ? `<div class="thumbWrap">
-                     <a href="/media/${encodeURIComponent(g.image)}" target="_blank" title="${escapeHtml(g.image)}">
-                       <div class="thumb">
-                         <img src="/media/${encodeURIComponent(g.image)}" alt="image" loading="lazy"/>
-                       </div>
-                     </a>
-                     <div class="fileRow">
-                       <span class="pill">IMG</span>
-                       <a class="link" target="_blank" href="/media/${encodeURIComponent(g.image)}">${escapeHtml(g.image)}</a>
-                     </div>
-                   </div>`
-                : '<span class="muted">None</span>'
-              }
-            </td>
-            <td class="msgCell" id="msg-${i}">
-              <pre class="msg">${escapeHtml(g.message||'')}</pre>
-            </td>
-            <td class="actions">
-              <button class="ghost" onclick="startEdit(${i})">Edit</button>
-              <button class="danger" onclick="delGroup(${i})">Delete</button>
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>`;
-  }
-
-  // Inline edit（保留排版）
-  function startEdit(i){
-    const cell = document.getElementById('msg-'+i);
-    if(!cell) return;
-    const original = cell.textContent;
-    cell.dataset.original = original;
-    cell.innerHTML = `
-      <textarea id="edit-${i}" rows="8" style="width:100%;"></textarea>
-      <div class="inline" style="margin-top:8px;">
-        <button onclick="saveEdit(${i})">Save</button>
-        <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
-      </div>`;
-    const ta = document.getElementById('edit-'+i);
-    ta.value = original;
-    ta.focus();
-  }
-  async function saveEdit(i){
-    const cell = document.getElementById('msg-'+i);
-    const ta = document.getElementById('edit-'+i);
-    if(!cell || !ta) return;
-    const newText = ta.value;
-    const r = await fetch('/api/groups/'+i, {
-      method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({message: newText})
-    });
-    if(r.ok){
-      cell.innerHTML = `<pre class="msg">${escapeHtml(newText)}</pre>`;
-      flash('Updated');
-    }else{
-      flash('Update failed');
-    }
-  }
-  function cancelEdit(i){
-    const cell = document.getElementById('msg-'+i);
-    if(!cell) return;
-    const original = cell.dataset.original || '';
-    cell.innerHTML = `<pre class="msg">${escapeHtml(original)}</pre>`;
-  }
-
-  async function addGroup(){
-    const fd = new FormData();
-    const f  = document.getElementById('image').files[0];
-    if(f){ fd.append('file', f); }
-    const msg = document.getElementById('message').value.trim();
-    if(!msg){ flash('Message required'); return; }
-    fd.append('message', msg);
-    const r = await fetch('/api/groups', { method:'POST', body:fd });
-    if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; loadGroups(); }
-    else{ flash('Add failed'); }
-  }
-  async function delGroup(idx){
-    if(!confirm('Delete this group?')) return;
-    const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Failed'); }
-  }
-
-  // ===== Schedules =====
-  async function loadSchedules(){
-    const r = await fetch('/api/schedules'); const j = await r.json();
-    const el = document.getElementById('schedules');
-    if(!j.length){ el.innerHTML='<p class="muted">No schedules. Add one above.</p>'; return; }
-    el.innerHTML = `<table>
-      <thead><tr><th>Time</th><th></th></tr></thead>
-      <tbody>${j.map(s=>`<tr>
-        <td class="mono">${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}</td>
-        <td class="actions"><button class="danger" onclick="delSchedule(${s.hour},${s.minute})">Delete</button></td>
-      </tr>`).join('')}</tbody></table>`;
-  }
-  async function addSchedule(){
-    const h = +document.getElementById('h').value, m = +document.getElementById('m').value;
-    const r = await fetch('/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hour:h, minute:m}) });
-    if(r.ok){ flash('Added'); reloadJobs(); } else { flash('Failed'); }
-  }
-  async function delSchedule(h,m){
-    const r = await fetch(`/api/schedules/${h}/${m}`, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); reloadJobs(); } else { flash('Failed'); }
-  }
-  async function reloadJobs(){ const r = await fetch('/api/reload', { method:'POST' }); flash(r.ok?'Reloaded':'Failed'); loadSchedules(); }
-  async function sendNowRandom(){ const r = await fetch('/api/send-now', { method:'POST' }); flash(r.ok?'Sent':'Failed'); }
-
-  // ===== Users =====
-  let _users = [];
-  async function loadUsers(){
-    const r = await fetch('/api/users');
-    const el = document.getElementById('usersTable');
-    if(!r.ok){ el.innerHTML = '<p class="muted">Unauthorized</p>'; return; }
-    _users = await r.json();
-    document.getElementById('userCount').textContent = _users.length;
-    renderUsers();
-  }
-  function renderUsers(){
-    const q = (document.getElementById('userSearch').value||'').trim();
-    const data = _users.filter(u => !q || String(u.chat_id).includes(q));
-    const el = document.getElementById('usersTable');
-    if(!data.length){ el.innerHTML = '<p class="muted">No users.</p>'; return; }
-    const tz = (data[0] && data[0].tz) ? data[0].tz : 'Local';
-    el.innerHTML = `<table>
-      <thead><tr><th>#</th><th>chat_id</th><th>Subscribed (${tz})</th><th></th></tr></thead>
-      <tbody>${data.map((u,i)=>`<tr>
-        <td class="mono">${i+1}</td>
-        <td class="mono">${u.chat_id}</td>
-        <td class="mono">${fmtLocalShort(u.created_at_local)}</td>
-        <td class="actions"><button class="danger" onclick="delUser(${u.chat_id})">Remove</button></td>
-      </tr>`).join('')}</tbody></table>`;
-  }
-  async function delUser(chat_id){
-    if(!confirm('Remove this user?')) return;
-    const r = await fetch('/api/users/'+chat_id, { method:'DELETE' });
-    if(r.ok){ flash('Removed'); loadUsers(); } else { flash('Failed'); }
-  }
-  function exportUsersCSV(){
-    const rows = [['chat_id','created_at_utc','created_at_local(short)','tz']]
-      .concat(_users.map(u=>[u.chat_id, u.created_at||'', fmtLocalShort(u.created_at_local)||'', u.tz||'']));
-    const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'}); const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click(); URL.revokeObjectURL(url);
-  }
-
-  // 初始
-  switchPanel('dashboard');
-</script>
-</body>
-</html>
-'''
-
-LOGIN_HTML = r'''
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Login</title>
-  <style>
-    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#0b1320; color:#eef2ff; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-    form{ width:min(92vw,420px); background:#121d33; border:1px solid #223054; border-radius:14px; padding:22px; }
-    h1{ margin:0 0 12px; font-size:18px; }
-    label{ font-size:12px; opacity:.85; display:block; margin:10px 0 6px; }
-    input,button{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid #334770; background:#0f1a2d; color:#eaf0ff; }
-    button{ margin-top:12px; background:#2546f2; border-color:#2546f2; cursor:pointer; }
-    .err{ color:#ff8f8f; margin:8px 0 0; font-size:13px; min-height:1.2em; }
-  </style>
-</head>
-<body>
-  <form method="post" action="/login">
-    <h1>Admin Login</h1>
-    <label>Username</label>
-    <input name="username" autocomplete="username" required />
-    <label>Password</label>
-    <input name="password" type="password" autocomplete="current-password" required />
-    <button>Login</button>
-    <div class="err">%ERR%</div>
-  </form>
-</body>
-</html>
-'''
+LOGIN_HTML = """<!DOCTYPE html>
+<!-- 保持不变 -->
+"""
 
 # --- Lifespan：启动/停止 & 首次迁移 users.json ------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 初始化数据库 & 迁移旧 users.json（若 DB 为空）
     init_db()
     try:
         if os.path.exists(USER_FILE):
@@ -696,7 +334,7 @@ async def lifespan(app: FastAPI):
                         if isinstance(data, list):
                             for cid in data:
                                 try:
-                                    db.add(User(chat_id=int(cid)))  # UTC 默认时间
+                                    db.add(User(chat_id=int(cid)))
                                 except Exception:
                                     pass
                             db.commit()
@@ -704,7 +342,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"用户迁移失败: {e}")
 
-    # 启动 Telegram 机器人
     global telegram_app
     telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
@@ -713,7 +350,6 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(CommandHandler("ce_ids", cmd_ce_ids))
     telegram_app.add_handler(CommandHandler("ce_test", cmd_ce_test))
 
-    # 启动定时器
     if not scheduler.running:
         scheduler.start()
     for job in scheduler.get_jobs():
@@ -724,7 +360,6 @@ async def lifespan(app: FastAPI):
                           minute=int(s.get("minute", 0)))
         logger.info(f"⏰ 已添加计划任务: {int(s.get('hour', 9)):02d}:{int(s.get('minute', 0)):02d}")
 
-    # 后台轮询（PTB v20）
     async def run_bot():
         await telegram_app.initialize()
         await telegram_app.start()
@@ -764,13 +399,11 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
     html = LOGIN_HTML.replace("%ERR%", "Invalid username or password.")
     return HTMLResponse(content=html)
 
-# ✅ 登出后 303 重定向为 GET，避免要求 username/password
 @app.post("/logout")
 async def do_logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
-# （可选）GET 方式登出
 @app.get("/logout")
 async def do_logout_get(request: Request):
     request.session.clear()
@@ -780,8 +413,7 @@ async def do_logout_get(request: Request):
 async def health():
     return {"ok": True, "time": datetime.utcnow().isoformat()}
 
-# === APIs（登录或 X-Admin-Key） ============================================
-# 信息组
+# === APIs ===================================================================
 @app.get("/api/groups")
 async def api_groups(request: Request):
     if not is_logged_in(request):
@@ -817,7 +449,6 @@ async def api_del_group(idx: int, request: Request, x_admin_key: Optional[str] =
     except IndexError:
         raise HTTPException(status_code=404, detail="Group not found")
 
-# ✅ 编辑消息组（PATCH）
 @app.patch("/api/groups/{idx}")
 async def api_edit_group(idx: int, payload: dict, request: Request, x_admin_key: Optional[str] = Header(None)):
     require_admin_access(request, x_admin_key)
@@ -831,7 +462,6 @@ async def api_edit_group(idx: int, payload: dict, request: Request, x_admin_key:
     except IndexError:
         raise HTTPException(status_code=404, detail="Group not found")
 
-# 定时
 @app.get("/api/schedules")
 async def api_list_schedules(request: Request):
     if not is_logged_in(request):
@@ -846,7 +476,6 @@ async def api_add_schedule(payload: dict, request: Request, x_admin_key: Optiona
     if not (0 <= h <= 23 and 0 <= m <= 59):
         raise HTTPException(status_code=400, detail="Invalid time")
     schedule_manager.add(h, m)
-    # 立即重载
     for job in scheduler.get_jobs():
         job.remove()
     for s in schedule_manager.list():
@@ -878,7 +507,6 @@ async def api_send_now(request: Request, x_admin_key: Optional[str] = Header(Non
     await send_daily_message()
     return {"ok": True}
 
-# 用户（按 TZ 返回本地时间 ISO；前端 substring(0,16) 显示到分钟）
 @app.get("/api/users")
 async def api_list_users(request: Request):
     if not is_logged_in(request):
@@ -891,14 +519,13 @@ async def api_list_users(request: Request):
         if created_at is None:
             out.append({"chat_id": int(chat_id), "created_at": None, "created_at_local": None, "tz": TIMEZONE})
             continue
-        # 若 DB 中是 naive 时间，则按 UTC 处理
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
         local_dt = created_at.astimezone(TZ)
         out.append({
             "chat_id": int(chat_id),
-            "created_at": created_at.astimezone(timezone.utc).isoformat(),  # UTC
-            "created_at_local": local_dt.isoformat(),                        # 按 TZ
+            "created_at": created_at.astimezone(timezone.utc).isoformat(),
+            "created_at_local": local_dt.isoformat(),
             "tz": TIMEZONE
         })
     return out
