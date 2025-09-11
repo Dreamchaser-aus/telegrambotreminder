@@ -111,6 +111,16 @@ class MessageGroupManager:
         else:
             raise IndexError("group index out of range")
 
+    def update(self, idx: int, message: Optional[str] = None, image: Optional[str] = None):
+        """更新指定索引的消息组（message / image 可二选一或同时传）"""
+        if not (0 <= idx < len(self.groups)):
+            raise IndexError("group index out of range")
+        if message is not None:
+            self.groups[idx]["message"] = (message or "").strip()
+        if image is not None:
+            self.groups[idx]["image"] = os.path.basename(image) if image else None
+        self.save()
+
     def random(self):
         import random
         if not self.groups:
@@ -279,6 +289,8 @@ ADMIN_HTML = r'''
     .inline{ display:inline-flex; gap:8px; align-items:center; }
     .danger{ background:var(--danger); border-color:var(--danger); }
     .success{ background:var(--ok); border-color:var(--ok); }
+    .ghost{ background:#ffffff; color:var(--text); border-color:#cbd5e1; }
+    .ghost:hover{ background:#f3f6fb; }
     .spacer{ flex:1; }
     #flash{
       position:fixed; right:16px; bottom:16px; background:#111827; color:#fff;
@@ -306,9 +318,9 @@ ADMIN_HTML = r'''
     }
     th:nth-child(1),td:nth-child(1){ width:56px; }     /* 序号列 */
     th:nth-child(2),td:nth-child(2){ width:280px; }    /* 图片列 */
-    th:nth-child(4),td:nth-child(4){ width:130px; }    /* 操作列 */
+    th:nth-child(4),td:nth-child(4){ width:200px; }    /* 操作列更宽以容纳 Edit+Delete */
     th:nth-child(3),td:nth-child(3){ min-width:320px; }/* 文案列最小宽度 */
-    td.actions{ text-align:right; }
+    td.actions{ text-align:right; white-space:nowrap; }
     td .link{
       display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
@@ -324,7 +336,7 @@ ADMIN_HTML = r'''
   <header>
     <h1>Daily Sender Admin</h1>
     <div class="spacer"></div>
-    <form action="/logout" method="post"><button>Logout</button></form>
+    <form action="/logout" method="post"><button class="ghost">Logout</button></form>
   </header>
 
   <div class="layout">
@@ -394,8 +406,8 @@ ADMIN_HTML = r'''
           <h2>Subscribed Users</h2>
           <div class="inline" style="margin-bottom:8px;">
             <span class="stat">Total: <b id="userCount">0</b></span>
-            <button onclick="loadUsers()">Refresh</button>
-            <button onclick="exportUsersCSV()">Export CSV</button>
+            <button class="ghost" onclick="loadUsers()">Refresh</button>
+            <button class="ghost" onclick="exportUsersCSV()">Export CSV</button>
           </div>
           <div class="searchbar">
             <input id="userSearch" placeholder="Filter by chat_id..." oninput="renderUsers()"/>
@@ -443,13 +455,51 @@ ADMIN_HTML = r'''
                 : '<span class="muted">None</span>'
               }
             </td>
-            <td class="msg">${escapeHtml(g.message)}</td>
-            <td class="actions"><button class="danger" onclick="delGroup(${i})">Delete</button></td>
+            <td class="msg" id="msg-${i}">${escapeHtml(g.message||'')}</td>
+            <td class="actions">
+              <button class="ghost" onclick="startEdit(${i})">Edit</button>
+              <button class="danger" onclick="delGroup(${i})">Delete</button>
+            </td>
           </tr>
         `).join('')}
       </tbody>
     </table>`;
   }
+
+  // Inline edit handlers
+  function startEdit(i){
+    const td = document.getElementById('msg-'+i);
+    if(!td) return;
+    const original = td.textContent;
+    td.dataset.original = original;
+    td.innerHTML = `
+      <textarea id="edit-${i}" rows="6" style="width:100%;"></textarea>
+      <div class="inline" style="margin-top:8px;">
+        <button onclick="saveEdit(${i})">Save</button>
+        <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
+      </div>`;
+    const ta = document.getElementById('edit-'+i);
+    ta.value = original; // 防止 </textarea> 注入
+    ta.focus();
+  }
+  async function saveEdit(i){
+    const ta = document.getElementById('edit-'+i);
+    if(!ta) return;
+    const newText = ta.value.trim();
+    const r = await fetch('/api/groups/'+i, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({message: newText})
+    });
+    if(r.ok){ flash('Updated'); loadGroups(); } else { flash('Update failed'); }
+  }
+  function cancelEdit(i){
+    const td = document.getElementById('msg-'+i);
+    if(!td) return;
+    const original = td.dataset.original || '';
+    td.innerHTML = escapeHtml(original);
+  }
+
   async function addGroup(){
     const fd = new FormData();
     const f  = document.getElementById('image').files[0];
@@ -464,7 +514,7 @@ ADMIN_HTML = r'''
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Failed'); }
+    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Delete failed'); }
   }
 
   // ===== Schedules =====
@@ -701,6 +751,20 @@ async def api_del_group(idx: int, request: Request, x_admin_key: Optional[str] =
     require_admin_access(request, x_admin_key)
     try:
         group_manager.delete(idx)
+        return {"ok": True}
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+# ✅ 编辑消息组（PATCH）
+@app.patch("/api/groups/{idx}")
+async def api_edit_group(idx: int, payload: dict, request: Request, x_admin_key: Optional[str] = Header(None)):
+    require_admin_access(request, x_admin_key)
+    try:
+        msg = payload.get("message")
+        img = payload.get("image")
+        if msg is None and img is None:
+            raise HTTPException(status_code=400, detail="Nothing to update")
+        group_manager.update(idx, message=msg, image=img)
         return {"ok": True}
     except IndexError:
         raise HTTPException(status_code=404, detail="Group not found")
