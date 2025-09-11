@@ -246,90 +246,52 @@ ADMIN_HTML = r'''
     }
     *{ box-sizing:border-box; }
     html,body{ height:100%; }
-    body{
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      margin:0; background:var(--bg); color:var(--text);
-    }
-    a{ color:var(--accent); text-decoration:none; }
-    a:hover{ text-decoration:underline; }
-    header{
-      padding:16px 20px; background:#ffffff; border-bottom:1px solid var(--line);
-      display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:5;
-    }
+    body{ font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:var(--bg); color:var(--text); }
+    a{ color:var(--accent); text-decoration:none; } a:hover{ text-decoration:underline; }
+    header{ padding:16px 20px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:5; }
     h1{ margin:0; font-size:18px; font-weight:600; }
     .layout{ max-width:1200px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:230px 1fr; gap:16px; }
-    aside{
-      background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px;
-      height:fit-content; position:sticky; top:90px;
-    }
-    .navlink{
-      display:block; width:100%; text-align:left; border:1px solid var(--line);
-      background:#ffffff; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer;
-    }
-    .navlink:hover{ background:#f3f6fb; }
-    .navlink.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
+    aside{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px; height:fit-content; position:sticky; top:90px; }
+    .navlink{ display:block; width:100%; text-align:left; border:1px solid var(--line); background:#fff; color:var(--text); padding:10px 12px; border-radius:10px; margin:6px 0; cursor:pointer; }
+    .navlink:hover{ background:#f3f6fb; } .navlink.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
     main{ display:block; }
-    section{
-      background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px;
-      box-shadow: 0 1px 2px rgba(0,0,0,.03);
-    }
+    section{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
     h2{ margin:6px 0 14px; font-size:16px; font-weight:600; }
     .row{ display:flex; gap:12px; flex-wrap:wrap; }
-    input,textarea,select,button{
-      font: inherit; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; background:#ffffff; color:var(--text);
-    }
+    input,textarea,select,button{ font:inherit; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; background:#fff; color:var(--text); }
     textarea{ resize:vertical; }
     button{ cursor:pointer; background:var(--accent); border-color:var(--accent); color:#fff; line-height:1.2; }
-    button:hover{ filter:brightness(0.97); }
-    button:disabled{ opacity:.6; cursor:not-allowed; }
+    button:hover{ filter:brightness(.97); } button:disabled{ opacity:.6; cursor:not-allowed; }
+    .ghost{ background:#fff; color:var(--text); border-color:#cbd5e1; } .ghost:hover{ background:#f3f6fb; }
+    .danger{ background:var(--danger); border-color:var(--danger); } .success{ background:var(--ok); border-color:var(--ok); }
     label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
     .grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     .muted{ font-size:13px; color:var(--muted); }
     .pill{ font-size:12px; padding:2px 8px; background:#eef2ff; color:#324aa8; border-radius:999px; border:1px solid #dbe4ff; }
     .inline{ display:inline-flex; gap:8px; align-items:center; }
-    .danger{ background:var(--danger); border-color:var(--danger); }
-    .success{ background:var(--ok); border-color:var(--ok); }
-    .ghost{ background:#ffffff; color:var(--text); border-color:#cbd5e1; }
-    .ghost:hover{ background:#f3f6fb; }
     .spacer{ flex:1; }
-    #flash{
-      position:fixed; right:16px; bottom:16px; background:#111827; color:#fff;
-      border:1px solid #0b1220; padding:10px 12px; border-radius:12px; display:none;
-      box-shadow:0 8px 24px rgba(0,0,0,.15);
-    }
-    .panel{ display:none; }
-    .panel.active{ display:block; }
-    .stat{
-      display:inline-block; padding:8px 10px; border:1px solid var(--line);
-      background:#ffffff; border-radius:10px; margin-right:8px;
-    }
+    #flash{ position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; border:1px solid #0b1220; padding:10px 12px; border-radius:12px; display:none; box-shadow:0 8px 24px rgba(0,0,0,.15); }
+    .panel{ display:none; } .panel.active{ display:block; }
+    .stat{ display:inline-block; padding:8px 10px; border:1px solid var(--line); background:#fff; border-radius:10px; margin-right:8px; }
     .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
-    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
 
-    /* 表格：避免重叠与溢出（亮色） */
-    table{
-      width:100%;
-      border-collapse:separate; border-spacing:0; table-layout:auto; background:#fff; border-radius:12px; overflow:hidden;
-    }
+    /* 表格 & 缩略图 */
+    table{ width:100%; border-collapse:separate; border-spacing:0; table-layout:auto; background:#fff; border-radius:12px; overflow:hidden; }
     thead th{ background:#f8fafc; }
-    th,td{
-      border-bottom:1px solid var(--line2);
-      padding:12px 10px; vertical-align:middle; text-align:left;
-    }
-    th:nth-child(1),td:nth-child(1){ width:56px; }     /* 序号列 */
-    th:nth-child(2),td:nth-child(2){ width:280px; }    /* 图片列 */
-    th:nth-child(4),td:nth-child(4){ width:200px; }    /* 操作列更宽以容纳 Edit+Delete */
-    th:nth-child(3),td:nth-child(3){ min-width:320px; }/* 文案列最小宽度 */
+    th,td{ border-bottom:1px solid var(--line2); padding:12px 10px; vertical-align:middle; text-align:left; }
+    th:nth-child(1),td:nth-child(1){ width:56px; }
+    th:nth-child(2),td:nth-child(2){ width:320px; }   /* 图片列更宽以容纳缩略图 */
+    th:nth-child(4),td:nth-child(4){ width:200px; }   /* 操作列放下两个按钮 */
+    th:nth-child(3),td:nth-child(3){ min-width:320px; }
     td.actions{ text-align:right; white-space:nowrap; }
-    td .link{
-      display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    }
+    td .link{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     td .msg{ white-space:pre-wrap; word-break:break-word; }
-    @media (max-width: 880px){
-      .grid{ grid-template-columns:1fr; }
-      .layout{ grid-template-columns:1fr; }
-      aside{ position:static; }
-    }
+    .thumbWrap{ display:flex; flex-direction:column; gap:6px; max-width:300px; }
+    .fileRow{ display:flex; align-items:center; gap:8px; }
+    .thumb{ width:300px; height:160px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+    .thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
+    @media (max-width:880px){ .grid{ grid-template-columns:1fr; } .layout{ grid-template-columns:1fr; } aside{ position:static; } .thumb{ width:100%; } }
   </style>
 </head>
 <body>
@@ -431,7 +393,6 @@ ADMIN_HTML = r'''
     if(name==='users'){ loadUsers(); }
   }
   const escapeHtml = (s)=> (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-  // 前端简化显示为 YYYY-MM-DD HH:mm
   const fmtLocalShort = (s)=> s ? s.substring(0,16).replace('T',' ') : '';
 
   // ===== Groups =====
@@ -448,10 +409,17 @@ ADMIN_HTML = r'''
             <td class="mono">${i+1}</td>
             <td>
               ${g.image
-                ? `<span class="inline">
-                     <span class="pill">IMG</span>
-                     <a class="link" target="_blank" href="/media/${encodeURIComponent(g.image)}">${escapeHtml(g.image)}</a>
-                   </span>`
+                ? `<div class="thumbWrap">
+                     <a href="/media/${encodeURIComponent(g.image)}" target="_blank" title="${escapeHtml(g.image)}">
+                       <div class="thumb">
+                         <img src="/media/${encodeURIComponent(g.image)}" alt="image" loading="lazy"/>
+                       </div>
+                     </a>
+                     <div class="fileRow">
+                       <span class="pill">IMG</span>
+                       <a class="link" target="_blank" href="/media/${encodeURIComponent(g.image)}">${escapeHtml(g.image)}</a>
+                     </div>
+                   </div>`
                 : '<span class="muted">None</span>'
               }
             </td>
@@ -479,7 +447,7 @@ ADMIN_HTML = r'''
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
       </div>`;
     const ta = document.getElementById('edit-'+i);
-    ta.value = original; // 防止 </textarea> 注入
+    ta.value = original;
     ta.focus();
   }
   async function saveEdit(i){
@@ -514,7 +482,7 @@ ADMIN_HTML = r'''
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r = await fetch('/api/groups/'+idx, { method:'DELETE' });
-    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Delete failed'); }
+    if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Failed'); }
   }
 
   // ===== Schedules =====
@@ -531,9 +499,7 @@ ADMIN_HTML = r'''
   }
   async function addSchedule(){
     const h = +document.getElementById('h').value, m = +document.getElementById('m').value;
-    const r = await fetch('/api/schedules', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hour:h, minute:m})
-    });
+    const r = await fetch('/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hour:h, minute:m}) });
     if(r.ok){ flash('Added'); reloadJobs(); } else { flash('Failed'); }
   }
   async function delSchedule(h,m){
@@ -577,13 +543,11 @@ ADMIN_HTML = r'''
     const rows = [['chat_id','created_at_utc','created_at_local(short)','tz']]
       .concat(_users.map(u=>[u.chat_id, u.created_at||'', fmtLocalShort(u.created_at_local)||'', u.tz||'']));
     const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click();
-    URL.revokeObjectURL(url);
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'}); const url  = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click(); URL.revokeObjectURL(url);
   }
 
-  // 初始进入 Dashboard
+  // 初始
   switchPanel('dashboard');
 </script>
 </body>
