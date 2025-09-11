@@ -286,12 +286,27 @@ ADMIN_HTML = r'''
     th:nth-child(3),td:nth-child(3){ min-width:320px; }
     td.actions{ text-align:right; white-space:nowrap; }
     td .link{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    td .msg{ white-space:pre-wrap; word-break:break-word; }
     .thumbWrap{ display:flex; flex-direction:column; gap:6px; max-width:300px; }
     .fileRow{ display:flex; align-items:center; gap:8px; }
     .thumb{ width:300px; height:160px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden; }
     .thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
-    @media (max-width:880px){ .grid{ grid-template-columns:1fr; } .layout{ grid-template-columns:1fr; } aside{ position:static; } .thumb{ width:100%; } }
+
+    /* 保留你输入时的换行/空格显示 */
+    .msgCell pre.msg{
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font-family: inherit;  /* 如需等宽对齐可换成 monospace */
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    @media (max-width:880px){
+      .grid{ grid-template-columns:1fr; }
+      .layout{ grid-template-columns:1fr; }
+      aside{ position:static; }
+      .thumb{ width:100%; }
+    }
   </style>
 </head>
 <body>
@@ -423,7 +438,9 @@ ADMIN_HTML = r'''
                 : '<span class="muted">None</span>'
               }
             </td>
-            <td class="msg" id="msg-${i}">${escapeHtml(g.message||'')}</td>
+            <td class="msgCell" id="msg-${i}">
+              <pre class="msg">${escapeHtml(g.message||'')}</pre>
+            </td>
             <td class="actions">
               <button class="ghost" onclick="startEdit(${i})">Edit</button>
               <button class="danger" onclick="delGroup(${i})">Delete</button>
@@ -434,14 +451,14 @@ ADMIN_HTML = r'''
     </table>`;
   }
 
-  // Inline edit handlers
+  // Inline edit handlers（保存/取消后还原 <pre>，保留排版）
   function startEdit(i){
-    const td = document.getElementById('msg-'+i);
-    if(!td) return;
-    const original = td.textContent;
-    td.dataset.original = original;
-    td.innerHTML = `
-      <textarea id="edit-${i}" rows="6" style="width:100%;"></textarea>
+    const cell = document.getElementById('msg-'+i);
+    if(!cell) return;
+    const original = cell.innerText;   // 保留换行
+    cell.dataset.original = original;
+    cell.innerHTML = `
+      <textarea id="edit-${i}" rows="8" style="width:100%;"></textarea>
       <div class="inline" style="margin-top:8px;">
         <button onclick="saveEdit(${i})">Save</button>
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
@@ -451,21 +468,27 @@ ADMIN_HTML = r'''
     ta.focus();
   }
   async function saveEdit(i){
+    const cell = document.getElementById('msg-'+i);
     const ta = document.getElementById('edit-'+i);
-    if(!ta) return;
-    const newText = ta.value.trim();
+    if(!cell || !ta) return;
+    const newText = ta.value;
     const r = await fetch('/api/groups/'+i, {
       method:'PATCH',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({message: newText})
     });
-    if(r.ok){ flash('Updated'); loadGroups(); } else { flash('Update failed'); }
+    if(r.ok){
+      cell.innerHTML = `<pre class="msg">${escapeHtml(newText)}</pre>`;
+      flash('Updated');
+    }else{
+      flash('Update failed');
+    }
   }
   function cancelEdit(i){
-    const td = document.getElementById('msg-'+i);
-    if(!td) return;
-    const original = td.dataset.original || '';
-    td.innerHTML = escapeHtml(original);
+    const cell = document.getElementById('msg-'+i);
+    if(!cell) return;
+    const original = cell.dataset.original || '';
+    cell.innerHTML = `<pre class="msg">${escapeHtml(original)}</pre>`;
   }
 
   async function addGroup(){
