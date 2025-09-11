@@ -3,6 +3,7 @@
 # - 左侧 Sidebar：Dashboard（信息组/定时/工具） + Users（订阅用户）
 # - 登录保护（SessionMiddleware），兼容 X-Admin-Key 作为后备
 import os
+import re
 import json
 import asyncio
 import logging
@@ -20,7 +21,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, func, desc
 
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram import Update
+from telegram import Update, MessageEntity
+from telegram.constants import MessageEntityType
 
 # --- Config & DB ------------------------------------------------------------
 from config import (
@@ -169,6 +171,35 @@ schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 telegram_app = None
 scheduler    = AsyncIOScheduler(timezone=TZ)
 
+# --- Premium 自定义表情：占位符 -> 实体 --------------------------------------
+def build_text_and_entities(src: str):
+    """
+    将文本中的 <ce:1234567890123456789> 占位符转成 Telegram custom_emoji 实体。
+    返回: (替换后的文本, entities 或 None)
+    """
+    if not src:
+        return src, None
+    out = []
+    entities = []
+    last = 0
+    for m in re.finditer(r"<ce:(\d+)>", src):
+        out.append(src[last:m.start()])
+        placeholder = "🙂"  # 占1字符
+        offset = sum(len(s) for s in out)
+        out.append(placeholder)
+        entities.append(
+            MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=offset,
+                length=1,
+                custom_emoji_id=m.group(1),
+            )
+        )
+        last = m.end()
+    out.append(src[last:])
+    text = "".join(out)
+    return text, (entities or None)
+
 # --- Telegram handlers ------------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -190,6 +221,17 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ 正在发送测试消息...")
     await send_daily_message()
 
+# 辅助命令：回显一条消息里的自定义表情 ID
+async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ents = update.message.entities or []
+    ids = [e.custom_emoji_id for e in ents if getattr(e, "type", None) == MessageEntityType.CUSTOM_EMOJI]
+    if ids:
+        await update.message.reply_text(
+            "custom_emoji_id:\n" + "\n".join(ids) + "\n\n在后台文案中写成 <ce:ID> 即可发送这些自定义表情。"
+        )
+    else:
+        await update.message.reply_text("这条消息里没有 Telegram 自定义表情。")
+
 # --- Core sending logic -----------------------------------------------------
 async def send_daily_message():
     group   = group_manager.random()
@@ -207,13 +249,25 @@ async def send_daily_message():
     if not message:
         message = DEFAULT_MESSAGE_TEMPLATE.format(time=datetime.now(TZ).strftime("%H:%M"))
 
+    # 构建 custom emoji 实体
+    text, entities = build_text_and_entities(message)
+
     for uid in user_manager.all_chat_ids():
         try:
             if image:
                 with open(image, "rb") as fp:
-                    await telegram_app.bot.send_photo(chat_id=uid, photo=fp, caption=message)
+                    await telegram_app.bot.send_photo(
+                        chat_id=uid,
+                        photo=fp,
+                        caption=text,
+                        caption_entities=entities,  # 关键
+                    )
             else:
-                await telegram_app.bot.send_message(chat_id=uid, text=message)
+                await telegram_app.bot.send_message(
+                    chat_id=uid,
+                    text=text,
+                    entities=entities,          # 关键
+                )
             logger.info(f"✅ 已发送给 {uid}")
         except Exception as e:
             logger.error(f"发送给 {uid} 失败: {e}")
@@ -281,8 +335,8 @@ ADMIN_HTML = r'''
     thead th{ background:#f8fafc; }
     th,td{ border-bottom:1px solid var(--line2); padding:12px 10px; vertical-align:middle; text-align:left; }
     th:nth-child(1),td:nth-child(1){ width:56px; }
-    th:nth-child(2),td:nth-child(2){ width:320px; }   /* 图片列更宽以容纳缩略图 */
-    th:nth-child(4),td:nth-child(4){ width:200px; }   /* 操作列放下两个按钮 */
+    th:nth-child(2),td:nth-child(2){ width:320px; }
+    th:nth-child(4),td:nth-child(4){ width:200px; }
     th:nth-child(3),td:nth-child(3){ min-width:320px; }
     td.actions{ text-align:right; white-space:nowrap; }
     td .link{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -291,7 +345,7 @@ ADMIN_HTML = r'''
     .thumb{ width:300px; height:160px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden; }
     .thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
 
-    /* 保留你输入时的换行/空格显示 */
+    /* 保留输入时的换行/对齐 */
     .msgCell pre.msg{
       white-space: pre-wrap;
       word-break: break-word;
@@ -455,7 +509,7 @@ ADMIN_HTML = r'''
   function startEdit(i){
     const cell = document.getElementById('msg-'+i);
     if(!cell) return;
-    const original = cell.innerText;   // 保留换行
+    const original = cell.textContent;   // 保留换行与空格
     cell.dataset.original = original;
     cell.innerHTML = `
       <textarea id="edit-${i}" rows="8" style="width:100%;"></textarea>
@@ -637,6 +691,7 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("stop", cmd_stop))
     telegram_app.add_handler(CommandHandler("test", cmd_test))
+    telegram_app.add_handler(CommandHandler("ce_ids", cmd_ce_ids))  # 获取自定义表情ID
 
     # 启动定时器
     if not scheduler.running:
