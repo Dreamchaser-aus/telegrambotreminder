@@ -171,35 +171,33 @@ schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 telegram_app = None
 scheduler    = AsyncIOScheduler(timezone=TZ)
 
-# --- Premium 自定义表情：占位符 -> 实体（UTF-16 偏移修复版） -------------------
+# --- Premium 自定义表情：占位符 -> 实体（UTF-16 偏移 + 零宽占位符） ------------
 def build_text_and_entities(src: str):
     """
     将文本中的 <ce:1234567890123456789> 占位符转成 Telegram custom_emoji 实体。
-    偏移与长度严格按 UTF-16 code units 计算，避免含 emoji 文案时错位。
+    偏移与长度按 UTF-16 code units 计算；占位符使用零宽连接符，实体失效时也不会看到“•”。
     """
     if not src:
         return src, None
 
     def u16_len(s: str) -> int:
-        # UTF-16 LE，去掉 BOM；单位=code units
         return len(s.encode("utf-16-le")) // 2
 
-    parts = []
-    entities = []
+    parts, entities = [], []
     last = 0
     for m in re.finditer(r"<ce:(\d+)>", src):
         parts.append(src[last:m.start()])
 
-        # 使用 1 个 UTF-16 单元的占位符（•：U+2022）
-        placeholder = "•"
+        placeholder = "\u200d"  # 零宽连接符（不可见，1 个 UTF-16 单元）
         text_so_far = "".join(parts)
-        offset = u16_len(text_so_far)          # 偏移按 UTF-16 计算
+        offset = u16_len(text_so_far)
+
         parts.append(placeholder)
         entities.append(
             MessageEntity(
                 type=MessageEntityType.CUSTOM_EMOJI,
                 offset=offset,
-                length=u16_len(placeholder),   # 长度=1
+                length=u16_len(placeholder),  # 1
                 custom_emoji_id=m.group(1),
             )
         )
@@ -230,7 +228,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ 正在发送测试消息...")
     await send_daily_message()
 
-# 辅助命令：读取一条消息里的自定义表情 ID（支持“回复模式”）
+# 读取一条消息里的自定义表情 ID（支持“回复模式”）
 async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.reply_to_message or update.message
     ents = msg.entities or []
@@ -243,6 +241,15 @@ async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text("这条消息里没有 Telegram 自定义表情。")
+
+# 自测命令：验证某个 ID 是否可用
+async def cmd_ce_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("用法：/ce_test <custom_emoji_id>")
+        return
+    ceid = context.args[0].strip()
+    txt, ents = build_text_and_entities(f"测试 <ce:{ceid}> OK")
+    await update.message.reply_text(txt, entities=ents)
 
 # --- Core sending logic -----------------------------------------------------
 async def send_daily_message():
@@ -272,13 +279,13 @@ async def send_daily_message():
                         chat_id=uid,
                         photo=fp,
                         caption=text,
-                        caption_entities=entities,  # 关键
+                        caption_entities=entities,
                     )
             else:
                 await telegram_app.bot.send_message(
                     chat_id=uid,
                     text=text,
-                    entities=entities,          # 关键
+                    entities=entities,
                 )
             logger.info(f"✅ 已发送给 {uid}")
         except Exception as e:
@@ -342,7 +349,7 @@ ADMIN_HTML = r'''
     .searchbar{ display:flex; gap:8px; align-items:center; margin:8px 0 12px; }
     .mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
 
-    /* 表格 & 缩略图 */
+    /* 表格 & 缩略图 + 保留输入排版 */
     table{ width:100%; border-collapse:separate; border-spacing:0; table-layout:auto; background:#fff; border-radius:12px; overflow:hidden; }
     thead th{ background:#f8fafc; }
     th,td{ border-bottom:1px solid var(--line2); padding:12px 10px; vertical-align:middle; text-align:left; }
@@ -352,17 +359,17 @@ ADMIN_HTML = r'''
     th:nth-child(3),td:nth-child(3){ min-width:320px; }
     td.actions{ text-align:right; white-space:nowrap; }
     td .link{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
     .thumbWrap{ display:flex; flex-direction:column; gap:6px; max-width:300px; }
     .fileRow{ display:flex; align-items:center; gap:8px; }
     .thumb{ width:300px; height:160px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden; }
     .thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
 
-    /* 保留输入时的换行/对齐 */
     .msgCell pre.msg{
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
-      font-family: inherit;  /* 如需等宽对齐可换成 monospace */
+      font-family: inherit;   /* 如需等宽对齐可改 monospace */
       line-height: 1.55;
       margin: 0;
     }
@@ -529,7 +536,7 @@ ADMIN_HTML = r'''
         <button onclick="saveEdit(${i})">Save</button>
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
       </div>`;
-    const ta = document.getElementById('edit-'+i');
+    const ta = document.getElementById('edit-'+i);
     ta.value = original;
     ta.focus();
   }
@@ -703,7 +710,8 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("stop", cmd_stop))
     telegram_app.add_handler(CommandHandler("test", cmd_test))
-    telegram_app.add_handler(CommandHandler("ce_ids", cmd_ce_ids))  # 获取自定义表情ID
+    telegram_app.add_handler(CommandHandler("ce_ids", cmd_ce_ids))
+    telegram_app.add_handler(CommandHandler("ce_test", cmd_ce_test))
 
     # 启动定时器
     if not scheduler.running:
@@ -756,13 +764,13 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
     html = LOGIN_HTML.replace("%ERR%", "Invalid username or password.")
     return HTMLResponse(content=html)
 
-# ✅ 修复：登出后以 303 重定向为 GET，避免要求 username/password
+# ✅ 登出后 303 重定向为 GET，避免要求 username/password
 @app.post("/logout")
 async def do_logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
-# （可选）支持 GET 方式登出，a 标签也可使用
+# （可选）GET 方式登出
 @app.get("/logout")
 async def do_logout_get(request: Request):
     request.session.clear()
@@ -870,7 +878,7 @@ async def api_send_now(request: Request, x_admin_key: Optional[str] = Header(Non
     await send_daily_message()
     return {"ok": True}
 
-# 用户（按 TZ 返回本地时间 ISO；前端用 substring(0,16) 显示到分钟）
+# 用户（按 TZ 返回本地时间 ISO；前端 substring(0,16) 显示到分钟）
 @app.get("/api/users")
 async def api_list_users(request: Request):
     if not is_logged_in(request):
