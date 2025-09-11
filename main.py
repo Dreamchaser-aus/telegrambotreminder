@@ -171,33 +171,42 @@ schedule_manager = ScheduleManager(SCHEDULES_FILE, SCHEDULES_DEFAULT)
 telegram_app = None
 scheduler    = AsyncIOScheduler(timezone=TZ)
 
-# --- Premium 自定义表情：占位符 -> 实体 --------------------------------------
+# --- Premium 自定义表情：占位符 -> 实体（UTF-16 偏移修复版） -------------------
 def build_text_and_entities(src: str):
     """
     将文本中的 <ce:1234567890123456789> 占位符转成 Telegram custom_emoji 实体。
-    返回: (替换后的文本, entities 或 None)
+    偏移与长度严格按 UTF-16 code units 计算，避免含 emoji 文案时错位。
     """
     if not src:
         return src, None
-    out = []
+
+    def u16_len(s: str) -> int:
+        # UTF-16 LE，去掉 BOM；单位=code units
+        return len(s.encode("utf-16-le")) // 2
+
+    parts = []
     entities = []
     last = 0
     for m in re.finditer(r"<ce:(\d+)>", src):
-        out.append(src[last:m.start()])
-        placeholder = "🙂"  # 占1字符
-        offset = sum(len(s) for s in out)
-        out.append(placeholder)
+        parts.append(src[last:m.start()])
+
+        # 使用 1 个 UTF-16 单元的占位符（•：U+2022）
+        placeholder = "•"
+        text_so_far = "".join(parts)
+        offset = u16_len(text_so_far)          # 偏移按 UTF-16 计算
+        parts.append(placeholder)
         entities.append(
             MessageEntity(
                 type=MessageEntityType.CUSTOM_EMOJI,
                 offset=offset,
-                length=1,
+                length=u16_len(placeholder),   # 长度=1
                 custom_emoji_id=m.group(1),
             )
         )
         last = m.end()
-    out.append(src[last:])
-    text = "".join(out)
+
+    parts.append(src[last:])
+    text = "".join(parts)
     return text, (entities or None)
 
 # --- Telegram handlers ------------------------------------------------------
@@ -221,13 +230,16 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ 正在发送测试消息...")
     await send_daily_message()
 
-# 辅助命令：回显一条消息里的自定义表情 ID
+# 辅助命令：读取一条消息里的自定义表情 ID（支持“回复模式”）
 async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ents = update.message.entities or []
-    ids = [e.custom_emoji_id for e in ents if getattr(e, "type", None) == MessageEntityType.CUSTOM_EMOJI]
+    msg = update.message.reply_to_message or update.message
+    ents = msg.entities or []
+    ids = [e.custom_emoji_id for e in ents
+           if getattr(e, "type", None) == MessageEntityType.CUSTOM_EMOJI]
     if ids:
         await update.message.reply_text(
-            "custom_emoji_id:\n" + "\n".join(ids) + "\n\n在后台文案中写成 <ce:ID> 即可发送这些自定义表情。"
+            "custom_emoji_id:\n" + "\n".join(ids) +
+            "\n\n在后台文案中写成 <ce:ID> 即可发送这些自定义表情。"
         )
     else:
         await update.message.reply_text("这条消息里没有 Telegram 自定义表情。")
@@ -505,11 +517,11 @@ ADMIN_HTML = r'''
     </table>`;
   }
 
-  // Inline edit handlers（保存/取消后还原 <pre>，保留排版）
+  // Inline edit（保留排版）
   function startEdit(i){
     const cell = document.getElementById('msg-'+i);
     if(!cell) return;
-    const original = cell.textContent;   // 保留换行与空格
+    const original = cell.textContent;
     cell.dataset.original = original;
     cell.innerHTML = `
       <textarea id="edit-${i}" rows="8" style="width:100%;"></textarea>
@@ -517,7 +529,7 @@ ADMIN_HTML = r'''
         <button onclick="saveEdit(${i})">Save</button>
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
       </div>`;
-    const ta = document.getElementById('edit-'+i);
+    const ta = document.getElementById('edit-'+i');
     ta.value = original;
     ta.focus();
   }
