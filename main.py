@@ -198,18 +198,18 @@ def render_text_with_ce(src: str):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if user_manager.is_subscribed(chat_id):
-        await update.message.reply_text("✅ 你已经订阅了每日提醒！")
+        await update.message.reply_text("✅ Cheers for jumpin’ on the MONOAUD Bot, mate! We’ll sling ya the latest promos as soon as they drop — stay tuned for the good stuff！")
     else:
         user_manager.add(chat_id)
-        await update.message.reply_text("✅ 你已成功订阅每日提醒！")
+        await update.message.reply_text("✅ Cheers for jumpin’ on the MONOAUD Bot, mate! We’ll sling ya the latest promos as soon as they drop — stay tuned for the good stuff！")
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if user_manager.is_subscribed(chat_id):
         user_manager.remove(chat_id)
-        await update.message.reply_text("✅ 你已取消订阅每日提醒。")
+        await update.message.reply_text("✅ You’ve unsubscribed from the MONOAUD Bot. No worries, mate — you can rejoin anytime to catch our latest promos and offers!")
     else:
-        await update.message.reply_text("❌ 你还没有订阅每日提醒。")
+        await update.message.reply_text("❌ G’day mate 👋 You haven’t joined the MONOAUD Bot yet! Subscribe now to get the latest promos, free chips, and hot offers straight to your Telegram. Don’t miss out!")
 
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ 正在发送测试消息...")
