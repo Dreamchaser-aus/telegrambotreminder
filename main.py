@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""
+main.py - Daily Sender Admin with Inline Buttons support
+Replace your existing main.py with this file (backup original first).
+"""
+
 import os
 import re
 import json
@@ -17,10 +22,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, func, desc
 
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- Config & DB ---
+# --- Config & DB (assumes your config.py, db.py, models.py exist) ---
 from config import (
     BOT_TOKEN, USER_FILE, BACKUP_DIR, MEDIA_DIR, RANDOM_DIR,
     DEFAULT_MESSAGE_TEMPLATE, DEFAULT_IMAGE, RANDOM_MESSAGES,
@@ -41,7 +46,7 @@ class UserManagerDB:
         with SessionLocal() as db:
             exists = db.scalar(select(User).where(User.chat_id == chat_id))
             if not exists:
-                db.add(User(chat_id=int(chat_id)))  # models.py 默认 UTC now()
+                db.add(User(chat_id=int(chat_id)))
                 db.commit()
 
     def remove(self, chat_id: int):
@@ -69,16 +74,23 @@ class MessageGroupManager:
         for g in self.groups:
             if g.get("image"):
                 g["image"] = os.path.basename(g["image"])
+            if "buttons" not in g or not isinstance(g.get("buttons"), list):
+                g["buttons"] = []
 
     def _load(self) -> List[dict]:
         try:
             if os.path.exists(self.groups_file):
                 with open(self.groups_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    groups = []
                     if isinstance(data, dict) and "groups" in data:
-                        return list(data["groups"])
+                        groups = list(data["groups"])
                     elif isinstance(data, list):
-                        return list(data)
+                        groups = list(data)
+                    for g in groups:
+                        if "buttons" not in g or not isinstance(g.get("buttons"), list):
+                            g["buttons"] = []
+                    return groups
         except Exception as e:
             logger.error(f"加载消息组失败: {e}")
         return []
@@ -90,10 +102,11 @@ class MessageGroupManager:
         except Exception as e:
             logger.error(f"保存消息组失败: {e}")
 
-    def add(self, image_filename: Optional[str], message: str):
+    def add(self, image_filename: Optional[str], message: str, buttons: Optional[List[dict]] = None):
         self.groups.append({
             "image": os.path.basename(image_filename) if image_filename else None,
             "message": message.strip(),
+            "buttons": buttons or []
         })
         self.save()
 
@@ -104,13 +117,30 @@ class MessageGroupManager:
         else:
             raise IndexError("group index out of range")
 
-    def update(self, idx: int, message: Optional[str] = None, image: Optional[str] = None):
+    def update(self, idx: int, message: Optional[str] = None, image: Optional[str] = None, buttons: Optional[List[dict]] = None):
         if not (0 <= idx < len(self.groups)):
             raise IndexError("group index out of range")
         if message is not None:
             self.groups[idx]["message"] = (message or "").strip()
         if image is not None:
             self.groups[idx]["image"] = os.path.basename(image) if image else None
+        if buttons is not None:
+            clean = []
+            for b in (buttons or []):
+                if not isinstance(b, dict):
+                    continue
+                text = str(b.get("text","")).strip()
+                url = b.get("url")
+                cb  = b.get("callback_data")
+                if not text:
+                    continue
+                if url:
+                    clean.append({"text": text, "url": str(url)})
+                elif cb:
+                    clean.append({"text": text, "callback_data": str(cb)})
+                else:
+                    continue
+            self.groups[idx]["buttons"] = clean
         self.save()
 
     def random(self):
@@ -162,17 +192,12 @@ telegram_app = None
 scheduler    = AsyncIOScheduler(timezone=TZ)
 
 # ---------------- Custom Emoji（HTML 标签法） ----------------
-# 允许：<ce:123>, ＜ce：123＞, < ce : 123 > 等写法
 CE_PATTERN = re.compile(r"[<＜]\s*ce\s*[:：]\s*(\d+)\s*[>＞]", re.IGNORECASE)
 
 def _html_escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def render_text_with_ce(src: str):
-    """
-    把占位符替换为 <tg-emoji emoji-id="...">🙂</tg-emoji> ，并返回 (text, parse_mode)
-    如果没有占位符，返回原文与 None。
-    """
     if not src:
         return src, None
 
@@ -215,7 +240,6 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ 正在发送测试消息...")
     await send_daily_message()
 
-# 提取一条消息中的 custom_emoji_id（支持回复别人的消息）
 async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.reply_to_message or update.message
     ents = getattr(msg, "entities", []) or getattr(msg, "caption_entities", []) or []
@@ -229,7 +253,6 @@ async def cmd_ce_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("这条消息里没有 Telegram 自定义表情。")
 
-# 自测：/ce_test <id>
 async def cmd_ce_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("用法：/ce_test <custom_emoji_id>")
@@ -238,15 +261,17 @@ async def cmd_ce_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     html = f'测试 <tg-emoji emoji-id="{ceid}">🙂</tg-emoji> OK'
     await update.message.reply_text(html, parse_mode="HTML")
 
-# ---------------- Core sending ----------------
+# ---------------- Core sending (with Inline Buttons) ----------------
 async def send_daily_message():
     group   = group_manager.random()
     image   = None
     message = None
+    buttons = None
     if group:
         message = group.get("message") or DEFAULT_MESSAGE_TEMPLATE.format(
             time=datetime.now(TZ).strftime("%H:%M")
         )
+        buttons = group.get("buttons") or []
         if group.get("image"):
             candidate = os.path.join(MEDIA_DIR, group["image"])
             if os.path.exists(candidate):
@@ -256,6 +281,17 @@ async def send_daily_message():
 
     text, parse_mode = render_text_with_ce(message)
 
+    reply_markup = None
+    if buttons:
+        kb_rows = []
+        for b in buttons:
+            if b.get("url"):
+                kb_rows.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+            elif b.get("callback_data"):
+                kb_rows.append([InlineKeyboardButton(text=b["text"], callback_data=b["callback_data"])])
+        if kb_rows:
+            reply_markup = InlineKeyboardMarkup(kb_rows)
+
     for uid in user_manager.all_chat_ids():
         try:
             if image:
@@ -264,17 +300,39 @@ async def send_daily_message():
                         chat_id=uid,
                         photo=fp,
                         caption=text,
-                        parse_mode=parse_mode  # 只有用到 CE 才是 "HTML"
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
                     )
             else:
                 await telegram_app.bot.send_message(
                     chat_id=uid,
                     text=text,
-                    parse_mode=parse_mode
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
                 )
             logger.info(f"✅ 已发送给 {uid}")
         except Exception as e:
             logger.error(f"发送给 {uid} 失败: {e}")
+
+# ---------------- Callback handling ----------------
+async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        q = update.callback_query
+        if not q:
+            return
+        data = q.data or ""
+        # 立刻 answer (防止 loading)
+        try:
+            await q.answer(text="已接收 👍")
+        except Exception:
+            pass
+        logger.info(f"Callback received: {data} from {q.from_user.id}")
+        # 可拓展：记录 DB、触发动作、返回不同信息等
+        # 例如：当 callback_data 以 "info:" 开头时返回更多信息
+        if data.startswith("info:"):
+            await q.message.reply_text(f"Info requested: {data[5:]}")
+    except Exception as e:
+        logger.error(f"callback handler error: {e}")
 
 # ---------------- Auth helpers ----------------
 def is_logged_in(request: Request) -> bool:
@@ -289,7 +347,7 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
         return
     require_admin_header(x_admin_key)
 
-# ---------------- Admin HTML（亮色 + 缩略图 + 在线编辑 + 保留换行） ----------------
+# ---------------- Admin HTML（包含 Buttons 编辑） ----------------
 ADMIN_HTML = r'''
 <!DOCTYPE html>
 <html>
@@ -386,6 +444,12 @@ ADMIN_HTML = r'''
               <textarea id="message" rows="5" placeholder="Enter message text..."></textarea>
             </div>
           </div>
+
+          <div style="margin-top:10px;">
+            <label>Buttons (每行 Text|URL 或 JSON array)</label>
+            <textarea id="buttons" rows="3" placeholder='示例每行: "Visit|https://example.com" 或 JSON: [{"text":"Visit","url":"https://..."},{"text":"Info","callback_data":"info_1"}]'></textarea>
+          </div>
+
           <div style="margin-top:10px;" class="inline">
             <button onclick="addGroup()">Add Group</button>
             <button class="success" onclick="sendNowRandom()">Send Random Now (All)</button>
@@ -459,6 +523,7 @@ ADMIN_HTML = r'''
 
   async function loadGroups(){
     const r=await fetch('/api/groups'); const j=await r.json(); const el=document.getElementById('groups');
+    window._loaded_groups = j || [];
     if(!j.length){ el.innerHTML='<p class="muted">No groups yet.</p>'; return; }
     el.innerHTML = `<table>
       <thead><tr><th class="mono">#</th><th>Image</th><th>Message</th><th></th></tr></thead>
@@ -477,7 +542,13 @@ ADMIN_HTML = r'''
                 </div>
               </div>` : '<span class="muted">None</span>'}
           </td>
-          <td class="msgCell" id="msg-${i}"><pre class="msg">${escapeHtml(g.message||'')}</pre></td>
+          <td class="msgCell" id="msg-${i}">
+            <pre class="msg">${escapeHtml(g.message||'')}</pre>
+            ${ (g.buttons && g.buttons.length) ? `<div style="margin-top:8px;">${g.buttons.map(b=>(
+                b.url ? `<a class="pill" href="${escapeHtml(b.url)}" target="_blank" style="margin-right:6px;">${escapeHtml(b.text)}</a>`
+                      : `<span class="pill" style="margin-right:6px;">${escapeHtml(b.text)}</span>`
+             )).join('')}</div>` : '' }
+          </td>
           <td class="actions">
             <button class="ghost" onclick="startEdit(${i})">Edit</button>
             <button class="danger" onclick="delGroup(${i})">Delete</button>
@@ -485,33 +556,60 @@ ADMIN_HTML = r'''
         </tr>`).join('')}
       </tbody></table>`;
   }
+
   function startEdit(i){
     const cell=document.getElementById('msg-'+i); if(!cell) return;
-    const original=cell.textContent; cell.dataset.original=original;
+    const original=cell.querySelector('pre.msg') ? cell.querySelector('pre.msg').textContent : '';
+    cell.dataset.original=original;
+    const buttons = (window._loaded_groups && window._loaded_groups[i] && window._loaded_groups[i].buttons) ? JSON.stringify(window._loaded_groups[i].buttons, null, 2) : '';
     cell.innerHTML = `
-      <textarea id="edit-${i}" rows="8" style="width:100%;"></textarea>
+      <textarea id="edit-${i}" rows="6" style="width:100%;"></textarea>
+      <div style="margin-top:8px;">
+        <label style="font-size:12px;color:#64748b;">Buttons (JSON array) — 每项 { "text":"", "url":"..." } 或 { "text":"", "callback_data": "..." }</label>
+        <textarea id="edit-btns-${i}" rows="4" style="width:100%;margin-top:6px;"></textarea>
+      </div>
       <div class="inline" style="margin-top:8px;">
         <button onclick="saveEdit(${i})">Save</button>
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
       </div>`;
-    document.getElementById('edit-'+i).value=original;
+    document.getElementById('edit-'+i).value = original;
+    document.getElementById('edit-btns-'+i).value = buttons;
   }
+
   async function saveEdit(i){
-    const ta=document.getElementById('edit-'+i); if(!ta) return;
-    const r=await fetch('/api/groups/'+i,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:ta.value})});
+    const ta=document.getElementById('edit-'+i); const t = ta ? ta.value : null;
+    const bta=document.getElementById('edit-btns-'+i); let buttons = null;
+    if(bta && bta.value.trim()){
+      try{ buttons = JSON.parse(bta.value); } catch(e){ flash('Buttons JSON invalid'); return; }
+    }
+    const payload = {};
+    if(t !== null) payload.message = t;
+    if(buttons !== null) payload.buttons = buttons;
+    const r=await fetch('/api/groups/'+i,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(r.ok){ flash('Updated'); loadGroups(); } else { flash('Update failed'); }
   }
+
   function cancelEdit(i){
     const cell=document.getElementById('msg-'+i); const original=cell?.dataset.original||''; cell.innerHTML=`<pre class="msg">${escapeHtml(original)}</pre>`;
   }
+
   async function addGroup(){
     const fd=new FormData(); const f=document.getElementById('image').files[0]; if(f) fd.append('file',f);
     const msg=document.getElementById('message').value.trim(); if(!msg){ flash('Message required'); return; }
     fd.append('message',msg);
+
+    const btnsRaw = (document.getElementById('buttons').value||'').trim();
+    if(btnsRaw){
+      let isJson = false;
+      try{ JSON.parse(btnsRaw); isJson = true; } catch(e){}
+      fd.append('buttons', btnsRaw);
+    }
+
     const r=await fetch('/api/groups',{method:'POST',body:fd});
-    if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; loadGroups(); }
+    if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; document.getElementById('buttons').value=''; loadGroups(); }
     else{ flash('Add failed'); }
   }
+
   async function delGroup(idx){
     if(!confirm('Delete this group?')) return;
     const r=await fetch('/api/groups/'+idx,{method:'DELETE'}); if(r.ok){ flash('Deleted'); loadGroups(); } else { flash('Failed'); }
@@ -633,6 +731,7 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(CommandHandler("test", cmd_test))
     telegram_app.add_handler(CommandHandler("ce_ids", cmd_ce_ids))
     telegram_app.add_handler(CommandHandler("ce_test", cmd_ce_test))
+    telegram_app.add_handler(CallbackQueryHandler(on_callback_query))
 
     if not scheduler.running:
         scheduler.start()
@@ -709,6 +808,7 @@ async def api_add_group(
     request: Request,
     message: str = Form(...),
     file: Optional[UploadFile] = File(None),
+    buttons: Optional[str] = Form(None),
     x_admin_key: Optional[str] = Header(None),
 ):
     require_admin_access(request, x_admin_key)
@@ -721,7 +821,27 @@ async def api_add_group(
         with open(dest, "wb") as f:
             f.write(content)
         filename = safe
-    group_manager.add(filename, message)
+
+    parsed_buttons = []
+    if buttons:
+        try:
+            data = json.loads(buttons)
+            if isinstance(data, list):
+                for b in data:
+                    if isinstance(b, dict) and b.get("text"):
+                        parsed_buttons.append(b)
+        except Exception:
+            for line in buttons.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if "|" in line:
+                    text, url = line.split("|", 1)
+                    parsed_buttons.append({"text": text.strip(), "url": url.strip()})
+                else:
+                    parsed_buttons.append({"text": line.strip(), "callback_data": line.strip()})
+
+    group_manager.add(filename, message, buttons=parsed_buttons)
     return {"ok": True}
 
 @app.delete("/api/groups/{idx}")
@@ -739,9 +859,15 @@ async def api_edit_group(idx: int, payload: dict, request: Request, x_admin_key:
     try:
         msg = payload.get("message")
         img = payload.get("image")
-        if msg is None and img is None:
+        buttons = payload.get("buttons")
+        if isinstance(buttons, str):
+            try:
+                buttons = json.loads(buttons)
+            except Exception:
+                buttons = None
+        if msg is None and img is None and buttons is None:
             raise HTTPException(status_code=400, detail="Nothing to update")
-        group_manager.update(idx, message=msg, image=img)
+        group_manager.update(idx, message=msg, image=img, buttons=buttons)
         return {"ok": True}
     except IndexError:
         raise HTTPException(status_code=404, detail="Group not found")
