@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-main.py - Daily Sender Admin with Inline Buttons support
+main.py - Daily Sender Admin with Visual Buttons Editor
 Replace your existing main.py with this file (backup original first).
 """
 
@@ -321,14 +321,11 @@ async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not q:
             return
         data = q.data or ""
-        # 立刻 answer (防止 loading)
         try:
             await q.answer(text="已接收 👍")
         except Exception:
             pass
         logger.info(f"Callback received: {data} from {q.from_user.id}")
-        # 可拓展：记录 DB、触发动作、返回不同信息等
-        # 例如：当 callback_data 以 "info:" 开头时返回更多信息
         if data.startswith("info:"):
             await q.message.reply_text(f"Info requested: {data[5:]}")
     except Exception as e:
@@ -347,7 +344,7 @@ def require_admin_access(request: Request, x_admin_key: Optional[str]):
         return
     require_admin_header(x_admin_key)
 
-# ---------------- Admin HTML（包含 Buttons 编辑） ----------------
+# ---------------- Admin HTML（包含 可视化每行按钮编辑器） ----------------
 ADMIN_HTML = r'''
 <!DOCTYPE html>
 <html>
@@ -409,11 +406,22 @@ ADMIN_HTML = r'''
       font-family: inherit; line-height: 1.55; margin: 0;
     }
 
+    /* buttons editor styles */
+    .buttons-editor{ margin-top:10px; border:1px dashed var(--line); padding:10px; border-radius:8px; background:#fff; }
+    .btn-row{ display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    .btn-row input[type="text"]{ flex:1; }
+    .btn-row select{ width:120px; }
+    .btn-row .small{ padding:6px 8px; font-size:13px; border-radius:8px; }
+    .btn-row .move{ width:36px; text-align:center; padding:6px; }
+    .btn-row .remove{ background:#fff; border:1px solid #f1f1f1; color:#b03030; }
+
     @media (max-width:880px){
       .grid{ grid-template-columns:1fr; }
       .layout{ grid-template-columns:1fr; }
       aside{ position:static; }
       .thumb{ width:100%; }
+      .btn-row{ flex-direction:column; align-items:stretch; }
+      .btn-row .move{ width:auto; }
     }
   </style>
 </head>
@@ -446,8 +454,12 @@ ADMIN_HTML = r'''
           </div>
 
           <div style="margin-top:10px;">
-            <label>Buttons (每行 Text|URL 或 JSON array)</label>
-            <textarea id="buttons" rows="3" placeholder='示例每行: "Visit|https://example.com" 或 JSON: [{"text":"Visit","url":"https://..."},{"text":"Info","callback_data":"info_1"}]'></textarea>
+            <label>Buttons (visual editor)</label>
+            <div id="add-buttons-editor" class="buttons-editor"></div>
+            <div style="margin-top:8px;" class="inline">
+              <button class="ghost" onclick="addButtonToEditor('add-buttons-editor')">+ Add Button</button>
+              <span class="muted" style="margin-left:8px;">每行代表一个按钮，选择类型为 URL 或 Callback（callback 会被作为 callback_data 发送）。</span>
+            </div>
           </div>
 
           <div style="margin-top:10px;" class="inline">
@@ -515,12 +527,115 @@ ADMIN_HTML = r'''
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+name).classList.add('active');
     document.querySelectorAll('.navlink').forEach(a=>a.classList.toggle('active', a.dataset.name===name));
-    if(name==='dashboard'){ loadGroups(); loadSchedules(); }
+    if(name==='dashboard'){ loadGroups(); loadSchedules(); initAddButtonsEditor(); }
     if(name==='users'){ loadUsers(); }
   }
   const escapeHtml=(s)=>(s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
   const fmtLocalShort=(s)=> s ? s.substring(0,16).replace('T',' ') : '';
 
+  // ---------- Buttons editor utilities ----------
+  function initAddButtonsEditor(){
+    const el = document.getElementById('add-buttons-editor');
+    el.innerHTML = '';
+    // start with one empty row
+    addButtonToEditor('add-buttons-editor', {text:'', type:'url', value:''});
+  }
+
+  function addButtonToEditor(editorId, item=null){
+    const container = document.getElementById(editorId);
+    if(!container) return;
+    const idx = container.children.length;
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    row.dataset.idx = idx;
+
+    const txt = document.createElement('input');
+    txt.type = 'text'; txt.placeholder='Button text (必填)';
+    txt.className = 'txt';
+    txt.value = item ? (item.text||'') : '';
+
+    const sel = document.createElement('select');
+    sel.className = 'type';
+    sel.innerHTML = `<option value="url">URL</option><option value="callback">Callback</option>`;
+    sel.value = item ? (item.type||'url') : 'url';
+
+    const val = document.createElement('input');
+    val.type = 'text'; val.placeholder='URL or callback_data';
+    val.className = 'val';
+    val.value = item ? (item.value||'') : '';
+
+    const up = document.createElement('button'); up.type='button'; up.className='small move'; up.textContent='↑';
+    up.title='Move up';
+    up.onclick = ()=>{ const p=row.previousElementSibling; if(p) container.insertBefore(row, p); reorderIndices(container); };
+
+    const down = document.createElement('button'); down.type='button'; down.className='small move'; down.textContent='↓';
+    down.title='Move down';
+    down.onclick = ()=>{ const n=row.nextElementSibling; if(n) container.insertBefore(n, row); reorderIndices(container); };
+
+    const remove = document.createElement('button'); remove.type='button'; remove.className='small remove'; remove.textContent='Remove';
+    remove.onclick = ()=>{ row.remove(); reorderIndices(container); };
+
+    // when switch type, adjust placeholder
+    sel.onchange = ()=> {
+      if(sel.value === 'url') val.placeholder = 'https://example.com';
+      else val.placeholder = 'callback_data (任意短字符串)';
+    };
+
+    // append
+    row.appendChild(txt);
+    row.appendChild(sel);
+    row.appendChild(val);
+    row.appendChild(up);
+    row.appendChild(down);
+    row.appendChild(remove);
+    container.appendChild(row);
+    reorderIndices(container);
+  }
+
+  function reorderIndices(container){
+    Array.from(container.children).forEach((r,i)=> r.dataset.idx = i);
+  }
+
+  function getButtonsFromEditor(editorId){
+    const container = document.getElementById(editorId);
+    if(!container) return [];
+    const out = [];
+    Array.from(container.children).forEach(r=>{
+      const text = r.querySelector('.txt')?.value?.trim() || '';
+      const type = r.querySelector('.type')?.value || 'url';
+      const value = r.querySelector('.val')?.value?.trim() || '';
+      if(!text) return; // require text
+      if(type === 'url' && value){
+        out.push({text:text, url:value});
+      } else if(type === 'callback'){
+        out.push({text:text, callback_data: value || text});
+      } else {
+        // if url type but no value, skip
+      }
+    });
+    return out;
+  }
+
+  function populateButtonsEditor(editorId, buttons){
+    const container = document.getElementById(editorId);
+    if(!container) return;
+    container.innerHTML = '';
+    if(!buttons || !buttons.length){
+      addButtonToEditor(editorId, {text:'', type:'url', value:''});
+      return;
+    }
+    buttons.forEach(b=>{
+      if(b.url){
+        addButtonToEditor(editorId, {text:b.text||'', type:'url', value:b.url||''});
+      } else if(b.callback_data){
+        addButtonToEditor(editorId, {text:b.text||'', type:'callback', value:b.callback_data||''});
+      } else {
+        addButtonToEditor(editorId, {text:b.text||'', type:'url', value:''});
+      }
+    });
+  }
+
+  // ---------- Groups CRUD + editor integration ----------
   async function loadGroups(){
     const r=await fetch('/api/groups'); const j=await r.json(); const el=document.getElementById('groups');
     window._loaded_groups = j || [];
@@ -558,39 +673,44 @@ ADMIN_HTML = r'''
   }
 
   function startEdit(i){
-    const cell=document.getElementById('msg-'+i); if(!cell) return;
-    const original=cell.querySelector('pre.msg') ? cell.querySelector('pre.msg').textContent : '';
-    cell.dataset.original=original;
-    const buttons = (window._loaded_groups && window._loaded_groups[i] && window._loaded_groups[i].buttons) ? JSON.stringify(window._loaded_groups[i].buttons, null, 2) : '';
+    const group = (window._loaded_groups && window._loaded_groups[i]) ? window._loaded_groups[i] : null;
+    if(!group) return;
+    const cell = document.getElementById('msg-'+i);
+    if(!cell) return;
+    cell.dataset.original = group.message || '';
+    // build editor UI inside this cell
     cell.innerHTML = `
-      <textarea id="edit-${i}" rows="6" style="width:100%;"></textarea>
-      <div style="margin-top:8px;">
-        <label style="font-size:12px;color:#64748b;">Buttons (JSON array) — 每项 { "text":"", "url":"..." } 或 { "text":"", "callback_data": "..." }</label>
-        <textarea id="edit-btns-${i}" rows="4" style="width:100%;margin-top:6px;"></textarea>
+      <textarea id="edit-msg-${i}" rows="6" style="width:100%;"></textarea>
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;color:#64748b;">Buttons (visual editor)</label>
+        <div id="edit-buttons-editor-${i}" class="buttons-editor"></div>
+        <div style="margin-top:6px;">
+          <button class="ghost" onclick="addButtonToEditor('edit-buttons-editor-${i}')">+ Add Button</button>
+        </div>
       </div>
       <div class="inline" style="margin-top:8px;">
         <button onclick="saveEdit(${i})">Save</button>
         <button class="ghost" onclick="cancelEdit(${i})">Cancel</button>
-      </div>`;
-    document.getElementById('edit-'+i).value = original;
-    document.getElementById('edit-btns-'+i).value = buttons;
+      </div>
+    `;
+    document.getElementById('edit-msg-'+i).value = group.message || '';
+    populateButtonsEditor(`edit-buttons-editor-${i}`, group.buttons || []);
   }
 
   async function saveEdit(i){
-    const ta=document.getElementById('edit-'+i); const t = ta ? ta.value : null;
-    const bta=document.getElementById('edit-btns-'+i); let buttons = null;
-    if(bta && bta.value.trim()){
-      try{ buttons = JSON.parse(bta.value); } catch(e){ flash('Buttons JSON invalid'); return; }
-    }
-    const payload = {};
-    if(t !== null) payload.message = t;
-    if(buttons !== null) payload.buttons = buttons;
+    const ta = document.getElementById('edit-msg-'+i);
+    if(!ta) return flash('No editor found');
+    const msg = ta.value;
+    const buttons = getButtonsFromEditor(`edit-buttons-editor-${i}`);
+    const payload = { message: msg, buttons: buttons };
     const r=await fetch('/api/groups/'+i,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(r.ok){ flash('Updated'); loadGroups(); } else { flash('Update failed'); }
   }
 
   function cancelEdit(i){
-    const cell=document.getElementById('msg-'+i); const original=cell?.dataset.original||''; cell.innerHTML=`<pre class="msg">${escapeHtml(original)}</pre>`;
+    const cell=document.getElementById('msg-'+i);
+    const original = cell?.dataset.original || '';
+    cell.innerHTML = `<pre class="msg">${escapeHtml(original)}</pre>`;
   }
 
   async function addGroup(){
@@ -598,15 +718,13 @@ ADMIN_HTML = r'''
     const msg=document.getElementById('message').value.trim(); if(!msg){ flash('Message required'); return; }
     fd.append('message',msg);
 
-    const btnsRaw = (document.getElementById('buttons').value||'').trim();
-    if(btnsRaw){
-      let isJson = false;
-      try{ JSON.parse(btnsRaw); isJson = true; } catch(e){}
-      fd.append('buttons', btnsRaw);
+    const buttons = getButtonsFromEditor('add-buttons-editor');
+    if(buttons && buttons.length){
+      fd.append('buttons', JSON.stringify(buttons));
     }
 
     const r=await fetch('/api/groups',{method:'POST',body:fd});
-    if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; document.getElementById('buttons').value=''; loadGroups(); }
+    if(r.ok){ flash('Added'); document.getElementById('message').value=''; document.getElementById('image').value=''; initAddButtonsEditor(); loadGroups(); }
     else{ flash('Add failed'); }
   }
 
@@ -667,6 +785,7 @@ ADMIN_HTML = r'''
     const a=document.createElement('a'); a.href=url; a.download='subscribed_users.csv'; a.click(); URL.revokeObjectURL(url);
   }
 
+  // initialize
   switchPanel('dashboard');
 </script>
 </body>
